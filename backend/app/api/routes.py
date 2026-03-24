@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import shutil
-import threading
+import subprocess
+import sys
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -9,7 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from backend.app.core.constants import SPADL_EXTENDED_TYPES
-from backend.app.core.settings import get_settings
+from backend.app.core.settings import PROJECT_ROOT, get_settings
 from backend.app.schemas.api import (
     DefaultDatasetRootResponse,
     DatasetUploadResponse,
@@ -35,6 +36,14 @@ sheet_mappings = SheetMappingStore(settings.sheet_mappings_path)
 pipeline = ElasticPipelineService(settings, store, sheets, sheet_mappings)
 
 router = APIRouter(prefix="/api", tags=["api"])
+
+
+def _spawn_session_build(session_id: str) -> None:
+    subprocess.Popen(
+        [sys.executable, "-m", "backend.app.worker.run_session", session_id],
+        cwd=str(PROJECT_ROOT),
+        start_new_session=True,
+    )
 
 
 def _contains_dataset_dirs(path: Path) -> bool:
@@ -161,8 +170,7 @@ def create_session(request: SessionCreateRequest) -> SessionStatusResponse:
         generate_video=request.generate_video,
     )
 
-    thread = threading.Thread(target=pipeline.build_session, args=(metadata["session_id"],), daemon=True)
-    thread.start()
+    _spawn_session_build(metadata["session_id"])
 
     return _to_status_response(metadata)
 
@@ -219,8 +227,7 @@ def resume_session(session_id: str, force: bool = Query(default=False)) -> Sessi
         )
 
     resumed = store.prepare_resume(session_id)
-    thread = threading.Thread(target=pipeline.build_session, args=(session_id,), daemon=True)
-    thread.start()
+    _spawn_session_build(session_id)
     return _to_status_response(resumed)
 
 
