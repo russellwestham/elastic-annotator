@@ -1,0 +1,25 @@
+name: Deploy Main To EC2
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: deploy-main-ec2
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            bash /home/ubuntu/elastic-annotator/deploy/ec2/deploy_on_server.sh

@@ -8,3 +8,24 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Env files
+.env
+
+# Local assistant/worklog artifacts (do not publish)
+.claude/
+AGENTS.md
+CLAUDE.md
+agent-docs/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+
+# Runtime artifacts
+backend/storage/sessions/*
+backend/storage/datasets/*
+backend/storage/sheet_mappings.json
+!backend/storage/sessions/.gitkeep
+!backend/storage/datasets/.gitkeep

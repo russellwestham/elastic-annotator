@@ -1,7 +1,25 @@
 [project]
 name = "elastic-annotator"
 version = "0.1.0"
-description = "Add your description here"
+description = "Local-first ELASTIC annotation web app (FastAPI + React)"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "fastapi>=0.116.1",
+    "gspread>=6.2.1",
+    "kloppy>=3.18.0",
+    "matplotlib>=3.10.6",
+    "numpy>=2.3.3",
+    "pandas>=2.3.2",
+    "pandera>=0.26.1",
+    "pydantic-settings>=2.10.1",
+    "python-multipart>=0.0.20",
+    "scipy>=1.16.2",
+    "tqdm>=4.67.1",
+    "uvicorn[standard]>=0.35.0",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "ruff>=0.13.0",
+]
