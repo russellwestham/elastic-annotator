@@ -6,7 +6,16 @@ UV_BIN="${UV_BIN:-/home/ubuntu/.local/bin/uv}"
 
 cd "$REPO_DIR"
 
-git fetch origin main
+for attempt in 1 2 3; do
+  if git fetch origin main; then
+    break
+  fi
+  if [ "$attempt" -eq 3 ]; then
+    echo "git fetch failed after retries" >&2
+    exit 1
+  fi
+  sleep 5
+done
 git checkout main
 git reset --hard origin/main
 
