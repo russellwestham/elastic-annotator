@@ -14,12 +14,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script_stop: true
-          script: |
-            set -euo pipefail
-            bash /home/ubuntu/elastic-annotator/deploy/ec2/deploy_on_server.sh
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          key_path=~/.ssh/ec2_deploy_key
+          printf '%s\n' "$EC2_SSH_KEY" > "$key_path"
+          chmod 600 "$key_path"
+
+          for attempt in 1 2 3; do
+            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=20 -i "$key_path" "$EC2_USER@$EC2_HOST" 'bash /home/ubuntu/elastic-annotator/deploy/ec2/deploy_on_server.sh'; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq 3 ]; then
+              echo "SSH deploy failed after retries" >&2
+              exit 1
+            fi
+
+            sleep 10
+          done
