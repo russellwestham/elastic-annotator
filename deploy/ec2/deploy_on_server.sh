@@ -18,5 +18,14 @@ npm run build
 cd ..
 
 sudo systemctl restart elastic-annotator
-sleep 2
-curl -fsS http://127.0.0.1:8000/api/health
+
+for _ in $(seq 1 30); do
+  if curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+    curl -fsS http://127.0.0.1:8000/api/health
+    exit 0
+  fi
+  sleep 2
+done
+
+echo "health check failed after restart" >&2
+exit 1
