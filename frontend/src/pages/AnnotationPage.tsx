@@ -1101,9 +1101,7 @@ export function AnnotationPage() {
     <div className="page page-annotate">
       <header className="annot-header">
         <div>
-          <h1>
-            {session.match_id} - {session.annotator_name}
-          </h1>
+          <h1>{session.match_id}</h1>
           <p className="muted">
             fps: {fps} | rows: {events.length} | save: {saveState}
           </p>
