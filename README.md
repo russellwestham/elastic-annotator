@@ -111,6 +111,10 @@ Sportec 데이터셋 기본 구조:
 8. `Confirm Row Changes`로 행 수정 확정
 9. 필요 시 `Sync Sheet`로 수동 동기화
 
+작업자용 상세 UX 매뉴얼:
+
+- [docs/ANNOTATOR_UX_GUIDE_KR.md](docs/ANNOTATOR_UX_GUIDE_KR.md)
+
 ## 4. 키보드/컨트롤
 
 - `Space`: 재생/정지
