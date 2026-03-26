@@ -118,6 +118,12 @@ cd frontend && npm ci && npm run build && cd ..
 sudo systemctl restart elastic-annotator
 ```
 
+### Deployment Sync Rule (Required)
+
+- Always deploy through this order: `local edit -> push to main -> deploy`.
+- Do not edit code directly on the EC2 server.
+- `deploy/ec2/deploy_on_server.sh` blocks deploy when server git state is dirty or diverged from fast-forward pull.
+
 ## 7) Backup minimum set
 
 Back up these paths regularly:

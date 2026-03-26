@@ -6,6 +6,29 @@ UV_BIN="${UV_BIN:-/home/ubuntu/.local/bin/uv}"
 
 cd "$REPO_DIR"
 
+if [ "$(git rev-parse --abbrev-ref HEAD)" != "main" ]; then
+  echo "deploy blocked: server branch must be main" >&2
+  exit 1
+fi
+
+if ! git diff --quiet --ignore-submodules --; then
+  echo "deploy blocked: tracked file edits exist on server; commit/push from local first" >&2
+  git status --short
+  exit 1
+fi
+
+if ! git diff --cached --quiet --ignore-submodules --; then
+  echo "deploy blocked: staged changes exist on server; commit/push from local first" >&2
+  git status --short
+  exit 1
+fi
+
+if [ -n "$(git ls-files --others --exclude-standard)" ]; then
+  echo "deploy blocked: untracked non-ignored files exist on server" >&2
+  git status --short
+  exit 1
+fi
+
 for attempt in 1 2 3; do
   if git fetch origin main; then
     break
@@ -17,7 +40,10 @@ for attempt in 1 2 3; do
   sleep 5
 done
 git checkout main
-git reset --hard origin/main
+git pull --ff-only origin main
+
+DEPLOY_SHA="$(git rev-parse --short HEAD)"
+echo "deploying commit: $DEPLOY_SHA"
 
 "$UV_BIN" sync
 

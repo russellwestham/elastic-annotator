@@ -145,7 +145,13 @@ Sportec 데이터셋 기본 구조:
 
 - [DEPLOYMENT.md](DEPLOYMENT.md)
 
-### 7.1 main 푸시 자동 배포 (EC2)
+### 7.1 동기화 운영 규칙 (필수)
+
+- 코드 수정은 반드시 `로컬 수정 -> main push -> 배포` 순서로 진행합니다.
+- 서버에서 직접 코드 수정/커밋하지 않습니다.
+- 배포 스크립트(`deploy/ec2/deploy_on_server.sh`)는 서버 워킹트리가 dirty이면 실패하도록 되어 있습니다.
+
+### 7.2 main 푸시 자동 배포 (EC2)
 
 이 저장소에는 `main` 브랜치 푸시 시 EC2에 자동 반영하는 GitHub Actions 워크플로가 포함되어 있습니다.
 
