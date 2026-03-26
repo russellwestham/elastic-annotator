@@ -73,6 +73,25 @@ export async function fetchSession(sessionId: string): Promise<SessionStatus> {
   return request<SessionStatus>(`/api/sessions/${sessionId}`);
 }
 
+export async function fetchSessions(params?: {
+  limit?: number;
+  status?: "processing" | "ready" | "error";
+  matchId?: string;
+}): Promise<SessionStatus[]> {
+  const qs = new URLSearchParams();
+  if (params?.limit != null) {
+    qs.set("limit", String(params.limit));
+  }
+  if (params?.status) {
+    qs.set("status", params.status);
+  }
+  if (params?.matchId) {
+    qs.set("match_id", params.matchId);
+  }
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return request<SessionStatus[]>(`/api/sessions${suffix}`);
+}
+
 export async function fetchEvents(sessionId: string): Promise<EventListResponse> {
   return request<EventListResponse>(`/api/sessions/${sessionId}/events`);
 }

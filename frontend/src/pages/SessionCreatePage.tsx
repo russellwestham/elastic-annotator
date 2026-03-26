@@ -6,12 +6,21 @@ import {
   createSession,
   fetchDefaultDatasetRoot,
   fetchMatches,
+  fetchSessions,
   fetchSession,
   fetchSheetMapping,
   upsertSheetMapping,
   uploadDataset,
 } from "../api";
 import type { MatchSummary, SessionStatus } from "../types";
+
+function formatDateTime(iso: string): string {
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) {
+    return iso;
+  }
+  return dt.toLocaleString("ko-KR", { hour12: false });
+}
 
 export function SessionCreatePage() {
   const navigate = useNavigate();
@@ -33,6 +42,8 @@ export function SessionCreatePage() {
   const [mappedSheetUrl, setMappedSheetUrl] = useState<string | null>(null);
   const [defaultDatasetRoot, setDefaultDatasetRoot] = useState<string>("");
   const [defaultDatasetExists, setDefaultDatasetExists] = useState<boolean>(false);
+  const [recentSessions, setRecentSessions] = useState<SessionStatus[]>([]);
+  const [loadingRecentSessions, setLoadingRecentSessions] = useState(false);
 
   const selectedMatchLabel = useMemo(() => {
     const selected = matches.find((m) => m.match_id === matchId);
@@ -61,8 +72,29 @@ export function SessionCreatePage() {
     }
   };
 
+  const loadRecentSessions = async () => {
+    setLoadingRecentSessions(true);
+    try {
+      const sessions = await fetchSessions({ limit: 30 });
+      setRecentSessions(sessions);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoadingRecentSessions(false);
+    }
+  };
+
   useEffect(() => {
     void loadMatches();
+    void loadRecentSessions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadRecentSessions();
+    }, 10000);
+    return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -184,6 +216,7 @@ export function SessionCreatePage() {
         generate_video: generateVideo,
       });
       setStatus(created);
+      void loadRecentSessions();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -342,9 +375,74 @@ export function SessionCreatePage() {
           <p>Session ID: {status.session_id}</p>
           <p>Status: {status.status}</p>
           <p>Progress: {status.progress ?? "-"}</p>
+          {status.sheet_url && (
+            <p>
+              Sheet:{" "}
+              <a href={status.sheet_url} target="_blank" rel="noreferrer">
+                Open sheet
+              </a>
+            </p>
+          )}
           {status.error_message && <pre className="error-box">{status.error_message}</pre>}
         </div>
       )}
+
+      <div className="card">
+        <div className="section-header">
+          <h2>Recent Sessions</h2>
+          <button type="button" onClick={() => void loadRecentSessions()} disabled={loadingRecentSessions}>
+            {loadingRecentSessions ? "Refreshing..." : "Refresh"}
+          </button>
+        </div>
+        <div className="table-wrap">
+          <table className="event-table">
+            <thead>
+              <tr>
+                <th>Updated</th>
+                <th>Match</th>
+                <th>Session ID</th>
+                <th>Status</th>
+                <th>Sheet</th>
+                <th>Open</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentSessions.map((session) => (
+                <tr key={session.session_id}>
+                  <td>{formatDateTime(session.updated_at)}</td>
+                  <td>{session.match_id}</td>
+                  <td className="event-cell-primary">{session.session_id}</td>
+                  <td title={session.progress ?? undefined}>
+                    {session.status}
+                    {session.progress ? (
+                      <div className="event-cell-secondary">{session.progress}</div>
+                    ) : null}
+                  </td>
+                  <td>
+                    {session.sheet_url ? (
+                      <a href={session.sheet_url} target="_blank" rel="noreferrer">
+                        Open sheet
+                      </a>
+                    ) : (
+                      <span className="muted">-</span>
+                    )}
+                  </td>
+                  <td>
+                    <a href={`/annotate/${session.session_id}`}>Open session</a>
+                  </td>
+                </tr>
+              ))}
+              {recentSessions.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="muted">
+                    No sessions yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       {error && <pre className="error-box">{error}</pre>}
     </div>
