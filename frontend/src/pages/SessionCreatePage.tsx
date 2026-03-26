@@ -6,7 +6,6 @@ import {
   createSession,
   fetchDefaultDatasetRoot,
   fetchMatches,
-  fetchPreferredOpenUrlForMatch,
   fetchSessions,
   fetchSession,
   fetchSheetMapping,
@@ -254,16 +253,7 @@ export function SessionCreatePage() {
     setOpeningLatest(true);
     setError(null);
     try {
-      const openUrl = await fetchPreferredOpenUrlForMatch(matchId);
-      if (!openUrl) {
-        setError(`No sheet/session found for match_id=${matchId}`);
-        return;
-      }
-      if (openUrl.startsWith("/")) {
-        navigate(openUrl);
-      } else {
-        window.location.assign(openUrl);
-      }
+      navigate(`/m/${encodeURIComponent(matchId)}`);
     } catch (err) {
       setError((err as Error).message);
     } finally {

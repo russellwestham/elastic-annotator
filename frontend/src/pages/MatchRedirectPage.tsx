@@ -1,35 +1,44 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
-import { fetchPreferredOpenUrlForMatch } from "../api";
+import { fetchLatestSessionForMatch, fetchSheetMapping } from "../api";
 
 export function MatchRedirectPage() {
-  const navigate = useNavigate();
   const { matchId = "" } = useParams();
   const [error, setError] = useState<string | null>(null);
+  const [fallbackSessionId, setFallbackSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     const run = async () => {
-      if (!matchId.trim()) {
+      const normalizedMatchId = matchId.trim();
+      if (!normalizedMatchId) {
         setError("match_id is required");
         return;
       }
+
       try {
-        const openUrl = await fetchPreferredOpenUrlForMatch(matchId.trim());
+        const mapping = await fetchSheetMapping(normalizedMatchId);
         if (cancelled) return;
-        if (!openUrl) {
-          setError(`No sheet/session found for match_id=${matchId}`);
+        const sheetUrl = mapping.sheet_url?.trim();
+        if (sheetUrl) {
+          window.location.replace(sheetUrl);
           return;
         }
-        if (openUrl.startsWith("/")) {
-          navigate(openUrl, { replace: true });
-          return;
+
+        const latest = await fetchLatestSessionForMatch(normalizedMatchId);
+        if (cancelled) return;
+        if (latest?.session_id) {
+          setFallbackSessionId(latest.session_id);
         }
-        window.location.replace(openUrl);
+        setError(`No mapped Google Sheet for match_id=${normalizedMatchId}`);
       } catch (err) {
         if (cancelled) return;
+        const latest = await fetchLatestSessionForMatch(normalizedMatchId);
+        if (!cancelled && latest?.session_id) {
+          setFallbackSessionId(latest.session_id);
+        }
         setError((err as Error).message);
       }
     };
@@ -38,13 +47,13 @@ export function MatchRedirectPage() {
     return () => {
       cancelled = true;
     };
-  }, [matchId, navigate]);
+  }, [matchId]);
 
   if (!error) {
     return (
       <div className="page">
         <div className="card">
-          <h2>Opening latest session...</h2>
+          <h2>Opening match sheet...</h2>
           <p className="muted">match_id: {matchId}</p>
         </div>
       </div>
@@ -54,8 +63,16 @@ export function MatchRedirectPage() {
   return (
     <div className="page">
       <div className="card">
-        <h2>Cannot open latest session</h2>
+        <h2>Cannot open match sheet</h2>
         <pre className="error-box">{error}</pre>
+        {fallbackSessionId && (
+          <p>
+            Latest session:{" "}
+            <a href={`/annotate/${fallbackSessionId}`} target="_blank" rel="noreferrer">
+              /annotate/{fallbackSessionId}
+            </a>
+          </p>
+        )}
         <p>
           <Link to="/">Go to Session Setup</Link>
         </p>
