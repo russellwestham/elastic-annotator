@@ -141,7 +141,11 @@ def _session_has_valid_sheet_tab(metadata: dict) -> bool:
         return True
 
     match_id = str(metadata.get("match_id") or "").strip()
-    sheet_tab_name = str(metadata.get("sheet_tab_name") or "").strip()
+    sheet_tab_name = str(
+        metadata.get("sheet_tab_name")
+        or GoogleSheetsService.normalize_annotator_name(metadata.get("annotator_name"))
+        or ""
+    ).strip()
     sheet_gid = str(metadata.get("sheet_gid") or "").strip()
     if not sheet_tab_name and not sheet_gid:
         return False
@@ -180,16 +184,20 @@ def _session_has_valid_sheet_tab(metadata: dict) -> bool:
     return exists
 
 
-def _ensure_ready_session_integrity(metadata: dict) -> dict:
-    if metadata.get("status") != "ready":
-        return metadata
-
+def _ready_integrity_reasons(metadata: dict) -> list[str]:
     reasons: list[str] = []
     if not _session_has_video_artifact(metadata):
         reasons.append("video_not_prepared")
     if not _session_has_valid_sheet_tab(metadata):
         reasons.append("sheet_tab_missing_or_invalid")
+    return reasons
 
+
+def _ensure_ready_session_integrity(metadata: dict) -> dict:
+    if metadata.get("status") != "ready":
+        return metadata
+
+    reasons = _ready_integrity_reasons(metadata)
     if not reasons:
         return metadata
 
@@ -202,6 +210,44 @@ def _ensure_ready_session_integrity(metadata: dict) -> dict:
         error_message=f"Session marked invalid from ready: {reason_text}",
     )
     return updated
+
+
+def _ensure_invalid_ready_state_recovery(metadata: dict) -> dict:
+    if metadata.get("status") != "error":
+        return metadata
+    if metadata.get("progress") != "invalid_ready_state":
+        return metadata
+
+    message = str(metadata.get("error_message") or "")
+    if not message.startswith("Session marked invalid from ready:"):
+        return metadata
+
+    reasons = _ready_integrity_reasons(metadata)
+    session_id = str(metadata.get("session_id") or "")
+    if reasons:
+        reason_text = ", ".join(reasons)
+        next_message = f"Session marked invalid from ready: {reason_text}"
+        if message == next_message:
+            return metadata
+        return store.update_metadata(
+            session_id,
+            status="error",
+            progress="invalid_ready_state",
+            error_message=next_message,
+        )
+
+    return store.update_metadata(
+        session_id,
+        status="ready",
+        progress="autosaved",
+        error_message=None,
+    )
+
+
+def _normalize_session_integrity(metadata: dict) -> dict:
+    normalized = _ensure_ready_session_integrity(metadata)
+    normalized = _ensure_invalid_ready_state_recovery(normalized)
+    return normalized
 
 
 def _to_sheet_mapping_response(match_id: str, sheet_id: str | None) -> SheetMappingResponse:
@@ -293,7 +339,7 @@ def get_session(session_id: str) -> SessionStatusResponse:
         metadata = store.load_metadata(session_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    metadata = _ensure_ready_session_integrity(metadata)
+    metadata = _normalize_session_integrity(metadata)
     return _to_status_response(metadata)
 
 
@@ -309,7 +355,7 @@ def list_sessions(
     sessions = store.list_sessions(limit=base_limit, status=None, match_id=match_id)
     normalized: list[dict] = []
     for metadata in sessions:
-        normalized.append(_ensure_ready_session_integrity(metadata))
+        normalized.append(_normalize_session_integrity(metadata))
     if status is not None:
         normalized = [metadata for metadata in normalized if metadata.get("status") == status]
     sessions = normalized[: max(1, limit)]
@@ -320,7 +366,7 @@ def list_sessions(
 def prune_sessions(keep_processing: bool = Query(default=True)) -> dict[str, object]:
     snapshots = store.list_sessions(limit=100_000, status=None, match_id=None)
     for metadata in snapshots:
-        _ensure_ready_session_integrity(metadata)
+        _normalize_session_integrity(metadata)
     return store.prune_keep_latest_alive(keep_processing=keep_processing)
 
 
