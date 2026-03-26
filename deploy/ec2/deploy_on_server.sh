@@ -3,6 +3,13 @@ set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-/home/ubuntu/elastic-annotator}"
 UV_BIN="${UV_BIN:-/home/ubuntu/.local/bin/uv}"
+LOCK_FILE="${LOCK_FILE:-/tmp/elastic-annotator-deploy.lock}"
+
+exec 200>"$LOCK_FILE"
+if ! flock -n 200; then
+  echo "deploy blocked: another deploy is already running (lock: $LOCK_FILE)" >&2
+  exit 1
+fi
 
 cd "$REPO_DIR"
 
