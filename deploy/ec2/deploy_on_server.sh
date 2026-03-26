@@ -48,10 +48,24 @@ echo "deploying commit: $DEPLOY_SHA"
 "$UV_BIN" sync
 
 cd frontend
-if ! npm ci; then
-  echo "npm ci failed once; cleaning node_modules and retrying" >&2
+install_ok=false
+for attempt in 1 2; do
+  if ! npm ci; then
+    echo "npm ci failed (attempt $attempt); cleaning node_modules and retrying" >&2
+    rm -rf node_modules
+    continue
+  fi
+  if [ -x node_modules/.bin/tsc ] && [ -x node_modules/.bin/vite ]; then
+    install_ok=true
+    break
+  fi
+  echo "npm ci completed but tsc/vite binaries are missing (attempt $attempt)" >&2
   rm -rf node_modules
-  npm ci
+done
+
+if [ "$install_ok" != "true" ]; then
+  echo "frontend dependency install validation failed after retries" >&2
+  exit 1
 fi
 npm run build
 cd ..
