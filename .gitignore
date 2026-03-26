@@ -27,5 +27,6 @@ frontend/*.tsbuildinfo
 backend/storage/sessions/*
 backend/storage/datasets/*
 backend/storage/sheet_mappings.json
+deploy/*.log
 !backend/storage/sessions/.gitkeep
 !backend/storage/datasets/.gitkeep
