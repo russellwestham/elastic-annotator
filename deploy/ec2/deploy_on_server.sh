@@ -48,7 +48,11 @@ echo "deploying commit: $DEPLOY_SHA"
 "$UV_BIN" sync
 
 cd frontend
-npm ci
+if ! npm ci; then
+  echo "npm ci failed once; cleaning node_modules and retrying" >&2
+  rm -rf node_modules
+  npm ci
+fi
 npm run build
 cd ..
 
