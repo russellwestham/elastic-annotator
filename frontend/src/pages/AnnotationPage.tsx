@@ -343,6 +343,8 @@ export function AnnotationPage() {
   const [currentTime, setCurrentTime] = useState(0);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveMessage, setSaveMessage] = useState("");
+  const [syncingSheet, setSyncingSheet] = useState(false);
+  const [resettingSheet, setResettingSheet] = useState(false);
 
   const [dirty, setDirty] = useState(false);
   const [initialLoaded, setInitialLoaded] = useState(false);
@@ -463,6 +465,13 @@ export function AnnotationPage() {
 
   const currentFrame = segmentStartFrame + Math.round(currentTime * fps);
   const selectedFrameDelta = selectedAnchorFrame === null ? null : selectedAnchorFrame - currentFrame;
+  const saveStateLabel = saveState === "saving"
+    ? "Saving"
+    : saveState === "saved"
+      ? "Saved"
+      : saveState === "error"
+        ? "Error"
+        : "Idle";
   const getTimestampOffsetForPeriod = (periodId: number | null | undefined, nearFrame?: number): number => {
     const targetPeriod = typeof periodId === "number" && Number.isFinite(periodId) ? periodId : 1;
     if (typeof nearFrame === "number" && Number.isFinite(nearFrame)) {
@@ -1012,6 +1021,8 @@ export function AnnotationPage() {
       setSaveMessage("먼저 Confirm Row Changes를 눌러 행 수정사항을 확정하세요.");
       return;
     }
+    if (syncingSheet || resettingSheet) return;
+    setSyncingSheet(true);
     setSaveState("saving");
     try {
       const result = await syncSheet(sessionId);
@@ -1022,6 +1033,8 @@ export function AnnotationPage() {
     } catch (err) {
       setSaveState("error");
       setSaveMessage((err as Error).message);
+    } finally {
+      setSyncingSheet(false);
     }
   };
 
@@ -1035,6 +1048,8 @@ export function AnnotationPage() {
       return;
     }
 
+    if (syncingSheet || resettingSheet) return;
+    setResettingSheet(true);
     setSaveState("saving");
     try {
       const result = await resetSheet(sessionId);
@@ -1045,6 +1060,8 @@ export function AnnotationPage() {
     } catch (err) {
       setSaveState("error");
       setSaveMessage((err as Error).message);
+    } finally {
+      setResettingSheet(false);
     }
   };
 
@@ -1080,21 +1097,39 @@ export function AnnotationPage() {
   return (
     <div className="page page-annotate">
       <header className="annot-header">
-        <div>
+        <div className="annot-title-group">
           <h1>{session.match_id}</h1>
-          <p className="muted">
-            fps: {fps} | rows: {events.length} | save: {saveState}
-          </p>
+          <div className="annot-meta">
+            <span className="meta-pill">{fps} fps</span>
+            <span className="meta-pill">{events.length} rows</span>
+            <span className={`status-chip ${saveState}`} aria-live="polite">
+              {saveState === "saving" && <span className="spinner" aria-hidden="true" />}
+              Save {saveStateLabel}
+            </span>
+          </div>
         </div>
-        <div className="row">
+        <div className="row annot-actions">
           {session.sheet_url && (
             <a className="button-link primary" href={session.sheet_url} target="_blank" rel="noreferrer">
               Open Google Sheet
             </a>
           )}
-          <button onClick={() => void handleSyncSheet()}>Sync Sheet</button>
-          <button className="danger" onClick={() => void handleResetSheet()}>Reset Sheet (Test)</button>
-          <Link to="/">New Session</Link>
+          <button
+            onClick={() => void handleSyncSheet()}
+            disabled={syncingSheet || resettingSheet}
+          >
+            {syncingSheet && <span className="spinner" aria-hidden="true" />}
+            {syncingSheet ? "Syncing..." : "Sync Sheet"}
+          </button>
+          <button
+            className="danger"
+            onClick={() => void handleResetSheet()}
+            disabled={syncingSheet || resettingSheet}
+          >
+            {resettingSheet && <span className="spinner" aria-hidden="true" />}
+            {resettingSheet ? "Resetting..." : "Reset Sheet (Test)"}
+          </button>
+          <Link className="button-link" to="/">New Session</Link>
         </div>
       </header>
 
@@ -1418,7 +1453,9 @@ export function AnnotationPage() {
         </div>
       )}
 
-      {saveMessage && <p className={saveState === "error" ? "error-text" : "muted"}>{saveMessage}</p>}
+      {saveMessage && (
+        <p className={`save-feedback ${saveState === "error" ? "error-text" : "muted"}`}>{saveMessage}</p>
+      )}
     </div>
   );
 }
