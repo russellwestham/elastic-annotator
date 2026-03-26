@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { fetchLatestSessionForMatch } from "../api";
+import { buildSessionOpenUrl, fetchLatestSessionForMatch } from "../api";
 
 export function MatchRedirectPage() {
   const navigate = useNavigate();
@@ -23,7 +23,12 @@ export function MatchRedirectPage() {
           setError(`No session found for match_id=${matchId}`);
           return;
         }
-        navigate(`/annotate/${latest.session_id}`, { replace: true });
+        const openUrl = buildSessionOpenUrl(latest);
+        if (openUrl.startsWith("/")) {
+          navigate(openUrl, { replace: true });
+          return;
+        }
+        window.location.replace(openUrl);
       } catch (err) {
         if (cancelled) return;
         setError((err as Error).message);

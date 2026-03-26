@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
+  buildSessionOpenUrl,
   clearSheetMapping,
   createSession,
   fetchDefaultDatasetRoot,
@@ -239,7 +240,12 @@ export function SessionCreatePage() {
         setError(`No session found for match_id=${matchId}`);
         return;
       }
-      navigate(`/annotate/${latest.session_id}`);
+      const openUrl = buildSessionOpenUrl(latest);
+      if (openUrl.startsWith("/")) {
+        navigate(openUrl);
+      } else {
+        window.location.assign(openUrl);
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -461,7 +467,9 @@ export function SessionCreatePage() {
                     )}
                   </td>
                   <td>
-                    <a href={`/annotate/${session.session_id}`}>Open session</a>
+                    <a href={buildSessionOpenUrl(session)} target="_blank" rel="noreferrer">
+                      Open linked
+                    </a>
                   </td>
                 </tr>
               ))}

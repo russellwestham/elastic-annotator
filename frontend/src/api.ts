@@ -121,6 +121,14 @@ export async function fetchLatestSessionForMatch(matchId: string): Promise<Sessi
   return ranked[0] ?? null;
 }
 
+export function buildSessionOpenUrl(session: SessionStatus): string {
+  const sheetUrl = session.sheet_url?.trim();
+  if (sheetUrl) {
+    return sheetUrl;
+  }
+  return `/annotate/${session.session_id}`;
+}
+
 export async function saveEvents(sessionId: string, events: EventRow[]): Promise<{
   ok: boolean;
   saved_count: number;
