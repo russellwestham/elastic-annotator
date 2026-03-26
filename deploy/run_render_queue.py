@@ -57,15 +57,15 @@ def get_reusable_ready(match_id):
 
 
 def create_or_attach(match_id):
-    ex = get_processing(match_id)
-    if ex:
-        log(f'Attach existing session {ex["session_id"]} for {match_id}')
-        return ex['session_id']
     ready = get_reusable_ready(match_id)
     if ready:
         vc = len(ready.get('video_urls') or [])
         log(f'Reuse ready session {ready["session_id"]} for {match_id} (videos={vc})')
         return ready['session_id']
+    ex = get_processing(match_id)
+    if ex:
+        log(f'Attach existing session {ex["session_id"]} for {match_id}')
+        return ex['session_id']
     payload = {
         'annotator_name': ANNOTATOR,
         'match_id': match_id,
