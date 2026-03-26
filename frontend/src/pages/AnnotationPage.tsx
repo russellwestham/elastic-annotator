@@ -1005,26 +1005,6 @@ export function AnnotationPage() {
     setDirty(true);
   };
 
-  const forceSave = async () => {
-    if (!sessionId) return;
-    if (hasPendingRowChanges) {
-      setSaveState("error");
-      setSaveMessage("먼저 Confirm Row Changes를 눌러 행 수정사항을 확정하세요.");
-      return;
-    }
-    setSaveState("saving");
-    try {
-      const result = await saveEvents(sessionId, events);
-      setWarnings(result.validation_warnings);
-      setSaveState("saved");
-      setSaveMessage(`Saved ${result.saved_count} rows`);
-      setDirty(false);
-    } catch (err) {
-      setSaveState("error");
-      setSaveMessage((err as Error).message);
-    }
-  };
-
   const handleSyncSheet = async () => {
     if (!sessionId) return;
     if (hasPendingRowChanges) {
@@ -1112,7 +1092,6 @@ export function AnnotationPage() {
               Open Google Sheet
             </a>
           )}
-          <button onClick={() => void forceSave()}>Save Now</button>
           <button onClick={() => void handleSyncSheet()}>Sync Sheet</button>
           <button className="danger" onClick={() => void handleResetSheet()}>Reset Sheet (Test)</button>
           <Link to="/">New Session</Link>
