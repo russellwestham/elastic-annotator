@@ -19,6 +19,10 @@ SYSTEM_ANNOTATOR_NAMES = {
     "none",
     "null",
 }
+SYSTEM_ANNOTATOR_PREFIXES = (
+    "batch-",
+    "batch_",
+)
 
 
 class GoogleSheetsService:
@@ -78,7 +82,8 @@ class GoogleSheetsService:
     @staticmethod
     def _normalize_annotator_name(annotator_name: str | None) -> str:
         normalized = (annotator_name or "").strip()
-        if normalized.lower() in SYSTEM_ANNOTATOR_NAMES:
+        lowered = normalized.lower()
+        if lowered in SYSTEM_ANNOTATOR_NAMES or any(lowered.startswith(prefix) for prefix in SYSTEM_ANNOTATOR_PREFIXES):
             return DEFAULT_ANNOTATOR_NAME
         return normalized
 
