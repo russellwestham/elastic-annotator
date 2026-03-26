@@ -7,7 +7,7 @@ import {
   fetchLatestSessionForMatch,
   fetchSession,
   fetchSpadlTypes,
-  resetSheet,
+  resetEvents,
   saveEvents,
   syncSheet,
 } from "../api";
@@ -1042,7 +1042,7 @@ export function AnnotationPage() {
     if (!sessionId) return;
 
     const confirmed = window.confirm(
-      "정말 전체 Google Sheet를 초기화할까요?\n모든 워크시트의 내용이 삭제됩니다.",
+      "초기 이벤트 상태로 되돌릴까요?\n현재 수정사항은 사라지며, Event Timeline과 시트가 초기값으로 복원됩니다.",
     );
     if (!confirmed) {
       return;
@@ -1052,11 +1052,24 @@ export function AnnotationPage() {
     setResettingSheet(true);
     setSaveState("saving");
     try {
-      const result = await resetSheet(sessionId);
+      const result = await resetEvents(sessionId);
+      setWarnings(result.validation_warnings);
       setSaveState("saved");
-      setSaveMessage(result.sheet_url ? `Sheet reset: ${result.sheet_url}` : "Sheet reset complete");
+      setSaveMessage(
+        result.source === "snapshot"
+          ? `Timeline reset to initial snapshot (${result.restored_count} rows)`
+          : `Timeline reset by recompute (${result.restored_count} rows)`,
+      );
       const latest = await fetchSession(sessionId);
       setSession(latest);
+      const eventData = await fetchEvents(sessionId);
+      setEvents(eventData.events);
+      setWarnings(eventData.validation_warnings);
+      setSelectedIndex((prev) => {
+        if (eventData.events.length === 0) return 0;
+        return Math.min(prev, eventData.events.length - 1);
+      });
+      setDirty(false);
     } catch (err) {
       setSaveState("error");
       setSaveMessage((err as Error).message);
@@ -1127,7 +1140,7 @@ export function AnnotationPage() {
             disabled={syncingSheet || resettingSheet}
           >
             {resettingSheet && <span className="spinner" aria-hidden="true" />}
-            {resettingSheet ? "Resetting..." : "Reset Sheet (Test)"}
+            {resettingSheet ? "Resetting..." : "Reset Timeline (Initial)"}
           </button>
           <Link className="button-link" to="/">New Session</Link>
         </div>

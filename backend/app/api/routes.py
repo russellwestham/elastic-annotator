@@ -302,6 +302,35 @@ def reset_sheet(session_id: str) -> dict[str, str | None]:
     return {"sheet_url": url}
 
 
+@router.post("/sessions/{session_id}/reset-events")
+def reset_events(session_id: str, sync_sheet: bool = Query(default=True)) -> dict[str, object]:
+    try:
+        _ = store.load_metadata(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    try:
+        events, source = pipeline.reset_events_to_initial(session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    warnings = pipeline.validate_events(events)
+    sheet_url = None
+    if sync_sheet and sheets.enabled:
+        try:
+            sheet_url = pipeline.sync_sheet(session_id)
+        except Exception as exc:
+            warnings.append(f"google sheet sync failed: {exc}")
+
+    return {
+        "ok": True,
+        "restored_count": len(events),
+        "source": source,
+        "validation_warnings": warnings,
+        "sheet_url": sheet_url,
+    }
+
+
 @router.post("/datasets/upload", response_model=DatasetUploadResponse)
 def upload_dataset(zip_file: UploadFile = File(...)) -> DatasetUploadResponse:
     if not zip_file.filename or not zip_file.filename.lower().endswith(".zip"):

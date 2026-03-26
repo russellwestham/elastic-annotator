@@ -19,6 +19,7 @@ from backend.app.utils.timecode import frame_to_timestamp
 logger = logging.getLogger(__name__)
 
 MATCH_ID_PATTERN = re.compile(r"DFL-MAT-([A-Z0-9]+)")
+SEGMENT_FRAME_PATTERN = re.compile(r"_(\d+)-(\d+)\.mp4(?:$|\?)")
 
 
 class ElasticPipelineService:
@@ -189,6 +190,7 @@ class ElasticPipelineService:
                         frame_end,
                     )
 
+            self.store.save_initial_events(session_id, rows)
             self.store.save_events(session_id, rows)
 
             sheet_url = None
@@ -249,6 +251,24 @@ class ElasticPipelineService:
         sheet_url = self.sheets.reset_sheet(match_id, sheet_id=mapped_sheet_id)
         self.store.update_metadata(session_id, sheet_url=sheet_url)
         return sheet_url
+
+    def reset_events_to_initial(self, session_id: str) -> tuple[list[dict], str]:
+        metadata = self.store.load_metadata(session_id)
+
+        source = "snapshot"
+        try:
+            initial_events = self.store.load_initial_events(session_id)
+            # Old sessions may not have a proper baseline even if the file exists.
+            if not initial_events and metadata.get("status") == "ready":
+                raise FileNotFoundError("Initial snapshot empty; fallback to recompute")
+        except FileNotFoundError:
+            initial_events = self._recompute_initial_rows(metadata)
+            self.store.save_initial_events(session_id, initial_events)
+            source = "recomputed"
+
+        self.store.save_events(session_id, initial_events)
+        self.store.update_metadata(session_id, event_count=len(initial_events), progress="reset_to_initial")
+        return initial_events, source
 
     def validate_events(self, events: list[dict]) -> list[str]:
         warnings: list[str] = []
@@ -324,3 +344,59 @@ class ElasticPipelineService:
             )
 
         return rows
+
+    @staticmethod
+    def _extract_video_frame_range(metadata: dict) -> tuple[int, int] | None:
+        candidates: list[tuple[int, int]] = []
+        video_urls = metadata.get("video_urls") or []
+        if metadata.get("video_url"):
+            video_urls = [metadata.get("video_url"), *video_urls]
+
+        for video_path in video_urls:
+            match = SEGMENT_FRAME_PATTERN.search(str(video_path))
+            if not match:
+                continue
+            start = int(match.group(1))
+            end = int(match.group(2))
+            candidates.append((start, end))
+
+        if not candidates:
+            return None
+
+        starts = [start for start, _ in candidates]
+        ends = [end for _, end in candidates]
+        return min(starts), max(ends)
+
+    def _recompute_initial_rows(self, metadata: dict) -> list[dict]:
+        dataset_root = Path(metadata["dataset_root"]).expanduser()
+        match_id = metadata["match_id"]
+
+        self._prepare_elastic_imports(dataset_root)
+        self._patch_schema_validation()
+
+        from sync.elastic_nw import ELASTIC_NW
+        from tools.evaluate import collapse_events
+        from tools.sportec_data import SportecData
+
+        match = SportecData(match_id=match_id)
+        input_events = match.format_events_for_syncer()
+        input_tracking = match.format_tracking_for_syncer()
+        input_events["utc_timestamp"] = pd.to_datetime(input_events["utc_timestamp"]).astype("datetime64[ns]")
+        input_tracking["utc_timestamp"] = pd.to_datetime(input_tracking["utc_timestamp"]).astype("datetime64[ns]")
+
+        syncer = ELASTIC_NW(input_events, input_tracking)
+        synced_with_controls = syncer.run(simplify_one_touch=False)
+        collapsed_events = collapse_events(synced_with_controls)
+        rows = self._to_annotation_rows(collapsed_events, fps=match.fps)
+
+        frame_range = self._extract_video_frame_range(metadata)
+        if frame_range is None:
+            return rows
+
+        frame_start, frame_end = frame_range
+        return [
+            row
+            for row in rows
+            if row.get("synced_frame_id") is None
+            or (frame_start <= int(row["synced_frame_id"]) <= frame_end)
+        ]

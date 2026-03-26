@@ -173,6 +173,19 @@ export async function resetSheet(sessionId: string): Promise<{ sheet_url: string
   });
 }
 
+export async function resetEvents(sessionId: string): Promise<{
+  ok: boolean;
+  restored_count: number;
+  source: "snapshot" | "recomputed";
+  validation_warnings: string[];
+  sheet_url: string | null;
+}> {
+  return request(`/api/sessions/${sessionId}/reset-events`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export async function uploadDataset(file: File): Promise<{ dataset_root: string }> {
   const formData = new FormData();
   formData.append("zip_file", file);

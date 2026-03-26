@@ -21,6 +21,9 @@ class SessionStore:
     def session_dir(self, session_id: str) -> Path:
         return self.sessions_root / session_id
 
+    def initial_events_path(self, session_id: str) -> Path:
+        return self.session_dir(session_id) / "initial_events.json"
+
     def create_session(self, annotator_name: str, match_id: str, dataset_root: str, generate_video: bool) -> dict[str, Any]:
         session_id = uuid4().hex[:12]
         created_at = self._now_iso()
@@ -46,6 +49,7 @@ class SessionStore:
         session_dir.mkdir(parents=True, exist_ok=False)
         self._write_json(session_dir / "metadata.json", payload)
         self._write_json(session_dir / "events.json", {"events": []})
+        self._write_json(session_dir / "initial_events.json", {"events": []})
         return payload
 
     def load_metadata(self, session_id: str) -> dict[str, Any]:
@@ -70,6 +74,18 @@ class SessionStore:
 
     def save_events(self, session_id: str, events: list[dict[str, Any]]) -> None:
         path = self.session_dir(session_id) / "events.json"
+        with self._lock:
+            self._write_json(path, {"events": events})
+
+    def load_initial_events(self, session_id: str) -> list[dict[str, Any]]:
+        path = self.initial_events_path(session_id)
+        if not path.exists():
+            raise FileNotFoundError(f"Unknown initial events for session: {session_id}")
+        data = self._read_json(path)
+        return data.get("events", [])
+
+    def save_initial_events(self, session_id: str, events: list[dict[str, Any]]) -> None:
+        path = self.initial_events_path(session_id)
         with self._lock:
             self._write_json(path, {"events": events})
 
@@ -140,6 +156,7 @@ class SessionStore:
     def prepare_resume(self, session_id: str) -> dict[str, Any]:
         metadata_path = self.session_dir(session_id) / "metadata.json"
         events_path = self.session_dir(session_id) / "events.json"
+        initial_events_path = self.initial_events_path(session_id)
 
         with self._lock:
             metadata = self._read_json(metadata_path)
@@ -158,6 +175,7 @@ class SessionStore:
             )
             self._write_json(metadata_path, metadata)
             self._write_json(events_path, {"events": []})
+            self._write_json(initial_events_path, {"events": []})
         return metadata
 
     def _iter_metadata_paths(self) -> list[Path]:
