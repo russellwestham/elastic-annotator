@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { buildArtifactUrl, fetchEvents, fetchSession, fetchSpadlTypes, resetSheet, saveEvents, syncSheet } from "../api";
+import {
+  buildArtifactUrl,
+  fetchEvents,
+  fetchLatestSessionForMatch,
+  fetchSession,
+  fetchSpadlTypes,
+  resetSheet,
+  saveEvents,
+  syncSheet,
+} from "../api";
 import { EventTable } from "../components/EventTable";
 import type { ErrorType, EventRow, SessionStatus } from "../types";
 
@@ -320,7 +329,8 @@ function normalizeMissingRowsByFrame(rows: EventRow[], fps: number): { rows: Eve
 }
 
 export function AnnotationPage() {
-  const { sessionId = "" } = useParams();
+  const { sessionId: routeSessionId = "", matchId = "" } = useParams();
+  const [sessionId, setSessionId] = useState(routeSessionId);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const suppressAutoFollowRef = useRef(false);
 
@@ -494,6 +504,56 @@ export function AnnotationPage() {
       }),
     [warnings],
   );
+
+  useEffect(() => {
+    if (routeSessionId) {
+      setSessionId(routeSessionId);
+      return;
+    }
+
+    const normalizedMatchId = matchId.trim();
+    if (!normalizedMatchId) {
+      setSessionId("");
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    void (async () => {
+      try {
+        const latest = await fetchLatestSessionForMatch(normalizedMatchId);
+        if (cancelled) return;
+        if (!latest) {
+          setSessionId("");
+          setSession(null);
+          setEvents([]);
+          setWarnings([]);
+          setInitialLoaded(false);
+          setDirty(false);
+          setSaveState("error");
+          setSaveMessage(`No session found for match_id=${normalizedMatchId}`);
+          setLoading(false);
+          return;
+        }
+        setSessionId(latest.session_id);
+      } catch (err) {
+        if (cancelled) return;
+        setSessionId("");
+        setSession(null);
+        setEvents([]);
+        setWarnings([]);
+        setInitialLoaded(false);
+        setDirty(false);
+        setSaveState("error");
+        setSaveMessage((err as Error).message);
+        setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [routeSessionId, matchId]);
 
   useEffect(() => {
     if (videoCandidates.length === 0) {
