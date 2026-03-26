@@ -126,7 +126,7 @@ export function buildSessionOpenUrl(session: SessionStatus): string {
   if (sheetUrl) {
     return sheetUrl;
   }
-  return `/annotate/${session.session_id}`;
+  return `/annotate/m/${encodeURIComponent(session.match_id)}`;
 }
 
 export async function fetchPreferredOpenUrlForMatch(matchId: string): Promise<string | null> {
