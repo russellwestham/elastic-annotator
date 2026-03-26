@@ -419,6 +419,7 @@ export function SessionCreatePage() {
           <p>Session ID: {status.session_id}</p>
           <p>Status: {status.status}</p>
           <p>Progress: {status.progress ?? "-"}</p>
+          <p>Sheet Tab: {status.sheet_tab_name ?? "-"}</p>
           {status.sheet_url && (
             <p>
               Sheet:{" "}
@@ -447,7 +448,7 @@ export function SessionCreatePage() {
                 <th>Session ID</th>
                 <th>Status</th>
                 <th>Sheet</th>
-                <th>Open Sheet</th>
+                <th>Sheet Tab</th>
                 <th>Open Annotate</th>
               </tr>
             </thead>
@@ -477,9 +478,17 @@ export function SessionCreatePage() {
                     )}
                   </td>
                   <td>
-                    <a href={`/m/${encodeURIComponent(session.match_id)}`} target="_blank" rel="noreferrer">
-                      {`/m/${session.match_id}`}
-                    </a>
+                    {(session.sheet_tab_url?.trim() || session.sheet_tab_name) ? (
+                      <a
+                        href={session.sheet_tab_url?.trim() || (session.sheet_url?.trim() || matchSheetUrls[session.match_id])}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {session.sheet_tab_name || "Open tab"}
+                      </a>
+                    ) : (
+                      <span className="muted">-</span>
+                    )}
                   </td>
                   <td>
                     <a href={`/annotate/m/${encodeURIComponent(session.match_id)}`} target="_blank" rel="noreferrer">

@@ -193,11 +193,16 @@ class ElasticPipelineService:
             self.store.save_initial_events(session_id, rows)
             self.store.save_events(session_id, rows)
 
-            sheet_url = None
+            sheet_meta: dict[str, str | None] = {
+                "sheet_url": None,
+                "sheet_tab_name": None,
+                "sheet_gid": None,
+                "sheet_tab_url": None,
+            }
             if self.sheets.enabled:
                 self.store.update_metadata(session_id, progress="syncing_google_sheets")
                 mapped_sheet_id = self.sheet_mappings.get_sheet_id(match_id)
-                sheet_url = self.sheets.upsert_annotations(
+                sheet_meta = self.sheets.upsert_annotations(
                     match_id,
                     annotator_name,
                     rows,
@@ -212,7 +217,10 @@ class ElasticPipelineService:
                 fps=float(match.fps),
                 video_url=video_url,
                 video_urls=video_urls,
-                sheet_url=sheet_url,
+                sheet_url=sheet_meta.get("sheet_url"),
+                sheet_tab_name=sheet_meta.get("sheet_tab_name"),
+                sheet_gid=sheet_meta.get("sheet_gid"),
+                sheet_tab_url=sheet_meta.get("sheet_tab_url"),
             )
 
         except Exception as exc:
@@ -232,14 +240,20 @@ class ElasticPipelineService:
         events = self.store.load_events(session_id)
         match_id = metadata["match_id"]
         mapped_sheet_id = self.sheet_mappings.get_sheet_id(match_id)
-        sheet_url = self.sheets.upsert_annotations(
+        sheet_meta = self.sheets.upsert_annotations(
             match_id,
             metadata["annotator_name"],
             events,
             sheet_id=mapped_sheet_id,
         )
-        self.store.update_metadata(session_id, sheet_url=sheet_url)
-        return sheet_url
+        self.store.update_metadata(
+            session_id,
+            sheet_url=sheet_meta.get("sheet_url"),
+            sheet_tab_name=sheet_meta.get("sheet_tab_name"),
+            sheet_gid=sheet_meta.get("sheet_gid"),
+            sheet_tab_url=sheet_meta.get("sheet_tab_url"),
+        )
+        return sheet_meta.get("sheet_url")
 
     def reset_sheet(self, session_id: str) -> str | None:
         if not self.sheets.enabled:

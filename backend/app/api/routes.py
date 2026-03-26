@@ -74,6 +74,14 @@ def _detect_dataset_root(extracted_root: Path) -> Path:
 
 
 def _to_status_response(metadata: dict) -> SessionStatusResponse:
+    sheet_tab_name = metadata.get("sheet_tab_name") or GoogleSheetsService.normalize_annotator_name(
+        metadata.get("annotator_name")
+    )
+    sheet_gid = metadata.get("sheet_gid")
+    sheet_url = metadata.get("sheet_url")
+    sheet_tab_url = metadata.get("sheet_tab_url") or (
+        GoogleSheetsService.build_sheet_tab_url(sheet_url, sheet_gid) if sheet_url else None
+    )
     return SessionStatusResponse(
         session_id=metadata["session_id"],
         annotator_name=metadata["annotator_name"],
@@ -88,7 +96,10 @@ def _to_status_response(metadata: dict) -> SessionStatusResponse:
         fps=metadata.get("fps"),
         video_url=metadata.get("video_url"),
         video_urls=metadata.get("video_urls"),
-        sheet_url=metadata.get("sheet_url"),
+        sheet_url=sheet_url,
+        sheet_tab_name=sheet_tab_name,
+        sheet_gid=sheet_gid,
+        sheet_tab_url=sheet_tab_url,
     )
 
 
@@ -194,6 +205,11 @@ def list_sessions(
         raise HTTPException(status_code=400, detail="status must be one of: processing, ready, error")
     sessions = store.list_sessions(limit=limit, status=status, match_id=match_id)
     return [_to_status_response(metadata) for metadata in sessions]
+
+
+@router.post("/maintenance/prune-sessions")
+def prune_sessions(keep_processing: bool = Query(default=True)) -> dict[str, object]:
+    return store.prune_keep_latest_alive(keep_processing=keep_processing)
 
 
 @router.post("/sessions/{session_id}/resume", response_model=SessionStatusResponse)

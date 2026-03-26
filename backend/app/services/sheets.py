@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from backend.app.core.settings import Settings
 
@@ -80,12 +81,21 @@ class GoogleSheetsService:
         ]
 
     @staticmethod
-    def _normalize_annotator_name(annotator_name: str | None) -> str:
+    def normalize_annotator_name(annotator_name: str | None) -> str:
         normalized = (annotator_name or "").strip()
         lowered = normalized.lower()
         if lowered in SYSTEM_ANNOTATOR_NAMES or any(lowered.startswith(prefix) for prefix in SYSTEM_ANNOTATOR_PREFIXES):
             return DEFAULT_ANNOTATOR_NAME
         return normalized
+
+    @staticmethod
+    def build_sheet_tab_url(sheet_url: str, worksheet_gid: str | int | None) -> str:
+        if not sheet_url:
+            return ""
+        if worksheet_gid is None:
+            return sheet_url
+        parsed = urlsplit(sheet_url)
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, f"gid={worksheet_gid}"))
 
     def _open_target_sheet(
         self,
@@ -158,9 +168,9 @@ class GoogleSheetsService:
         annotator_name: str,
         events: list[dict[str, Any]],
         sheet_id: str | None = None,
-    ) -> str:
+    ) -> dict[str, str | None]:
         client = self._authorize()
-        annotator_key = self._normalize_annotator_name(annotator_name)
+        annotator_key = self.normalize_annotator_name(annotator_name)
         sheet = self._open_target_sheet(client, match_id, create_if_missing=True, sheet_id=sheet_id)
 
         worksheet = None
@@ -219,7 +229,14 @@ class GoogleSheetsService:
             except Exception as exc:
                 logger.warning("Failed to share sheet to %s: %s", email, exc)
 
-        return sheet.url
+        worksheet_gid = str(getattr(worksheet, "id", "")) or None
+        sheet_url = str(getattr(sheet, "url", "") or "")
+        return {
+            "sheet_url": sheet_url,
+            "sheet_tab_name": worksheet.title,
+            "sheet_gid": worksheet_gid,
+            "sheet_tab_url": self.build_sheet_tab_url(sheet_url, worksheet_gid),
+        }
 
     def reset_sheet(self, match_id: str, sheet_id: str | None = None) -> str:
         client = self._authorize()

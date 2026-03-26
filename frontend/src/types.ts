@@ -40,6 +40,9 @@ export interface SessionStatus {
   video_url?: string | null;
   video_urls?: string[] | null;
   sheet_url?: string | null;
+  sheet_tab_name?: string | null;
+  sheet_gid?: string | null;
+  sheet_tab_url?: string | null;
 }
 
 export interface EventRow {
