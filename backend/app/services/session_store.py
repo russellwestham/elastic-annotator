@@ -120,15 +120,13 @@ class SessionStore:
             snapshots.append(metadata)
 
         latest_alive_by_key: dict[tuple[str, str], dict[str, Any]] = {}
-        processing_ids: set[str] = set()
-
         for metadata in snapshots:
             status = str(metadata.get("status") or "")
             session_id = str(metadata.get("session_id") or "").strip()
             if not session_id:
                 continue
-            if status == "processing" and keep_processing:
-                processing_ids.add(session_id)
+            if status == "processing" and not keep_processing:
+                continue
             if status not in {"processing", "ready"}:
                 continue
 
@@ -151,7 +149,6 @@ class SessionStore:
                 latest_alive_by_key[key] = metadata
 
         keep_ids = {meta.get("session_id") for meta in latest_alive_by_key.values() if meta.get("session_id")}
-        keep_ids.update(processing_ids)
 
         deleted_ids: list[str] = []
         for metadata in snapshots:
