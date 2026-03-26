@@ -129,6 +129,24 @@ export function buildSessionOpenUrl(session: SessionStatus): string {
   return `/annotate/${session.session_id}`;
 }
 
+export async function fetchPreferredOpenUrlForMatch(matchId: string): Promise<string | null> {
+  try {
+    const mapping = await fetchSheetMapping(matchId);
+    const mappedSheetUrl = mapping.sheet_url?.trim();
+    if (mappedSheetUrl) {
+      return mappedSheetUrl;
+    }
+  } catch {
+    // Fall back to latest session-based routing.
+  }
+
+  const latest = await fetchLatestSessionForMatch(matchId);
+  if (!latest) {
+    return null;
+  }
+  return buildSessionOpenUrl(latest);
+}
+
 export async function saveEvents(sessionId: string, events: EventRow[]): Promise<{
   ok: boolean;
   saved_count: number;

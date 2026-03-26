@@ -2,12 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
-  buildSessionOpenUrl,
   clearSheetMapping,
   createSession,
   fetchDefaultDatasetRoot,
-  fetchLatestSessionForMatch,
   fetchMatches,
+  fetchPreferredOpenUrlForMatch,
   fetchSessions,
   fetchSession,
   fetchSheetMapping,
@@ -45,6 +44,7 @@ export function SessionCreatePage() {
   const [defaultDatasetRoot, setDefaultDatasetRoot] = useState<string>("");
   const [defaultDatasetExists, setDefaultDatasetExists] = useState<boolean>(false);
   const [recentSessions, setRecentSessions] = useState<SessionStatus[]>([]);
+  const [matchSheetUrls, setMatchSheetUrls] = useState<Record<string, string>>({});
   const [loadingRecentSessions, setLoadingRecentSessions] = useState(false);
   const [openingLatest, setOpeningLatest] = useState(false);
 
@@ -80,6 +80,25 @@ export function SessionCreatePage() {
     try {
       const sessions = await fetchSessions({ limit: 30 });
       setRecentSessions(sessions);
+
+      const matchIds = [...new Set(sessions.map((session) => session.match_id))];
+      const mapped = await Promise.all(
+        matchIds.map(async (id) => {
+          try {
+            const mapping = await fetchSheetMapping(id);
+            return [id, mapping.sheet_url?.trim() ?? ""] as const;
+          } catch {
+            return [id, ""] as const;
+          }
+        }),
+      );
+      const sheetByMatch: Record<string, string> = {};
+      for (const [id, sheetUrl] of mapped) {
+        if (sheetUrl) {
+          sheetByMatch[id] = sheetUrl;
+        }
+      }
+      setMatchSheetUrls(sheetByMatch);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -235,12 +254,11 @@ export function SessionCreatePage() {
     setOpeningLatest(true);
     setError(null);
     try {
-      const latest = await fetchLatestSessionForMatch(matchId);
-      if (!latest) {
-        setError(`No session found for match_id=${matchId}`);
+      const openUrl = await fetchPreferredOpenUrlForMatch(matchId);
+      if (!openUrl) {
+        setError(`No sheet/session found for match_id=${matchId}`);
         return;
       }
-      const openUrl = buildSessionOpenUrl(latest);
       if (openUrl.startsWith("/")) {
         navigate(openUrl);
       } else {
@@ -458,8 +476,12 @@ export function SessionCreatePage() {
                     ) : null}
                   </td>
                   <td>
-                    {session.sheet_url ? (
-                      <a href={session.sheet_url} target="_blank" rel="noreferrer">
+                    {(session.sheet_url?.trim() || matchSheetUrls[session.match_id]) ? (
+                      <a
+                        href={session.sheet_url?.trim() || matchSheetUrls[session.match_id]}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
                         Open sheet
                       </a>
                     ) : (
@@ -467,8 +489,8 @@ export function SessionCreatePage() {
                     )}
                   </td>
                   <td>
-                    <a href={buildSessionOpenUrl(session)} target="_blank" rel="noreferrer">
-                      Open linked
+                    <a href={`/m/${encodeURIComponent(session.match_id)}`} target="_blank" rel="noreferrer">
+                      Open match
                     </a>
                   </td>
                 </tr>

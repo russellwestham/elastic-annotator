@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { buildSessionOpenUrl, fetchLatestSessionForMatch } from "../api";
+import { fetchPreferredOpenUrlForMatch } from "../api";
 
 export function MatchRedirectPage() {
   const navigate = useNavigate();
@@ -17,13 +17,12 @@ export function MatchRedirectPage() {
         return;
       }
       try {
-        const latest = await fetchLatestSessionForMatch(matchId.trim());
+        const openUrl = await fetchPreferredOpenUrlForMatch(matchId.trim());
         if (cancelled) return;
-        if (!latest) {
-          setError(`No session found for match_id=${matchId}`);
+        if (!openUrl) {
+          setError(`No sheet/session found for match_id=${matchId}`);
           return;
         }
-        const openUrl = buildSessionOpenUrl(latest);
         if (openUrl.startsWith("/")) {
           navigate(openUrl, { replace: true });
           return;
