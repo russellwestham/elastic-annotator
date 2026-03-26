@@ -1105,13 +1105,13 @@ export function AnnotationPage() {
           <p className="muted">
             fps: {fps} | rows: {events.length} | save: {saveState}
           </p>
+        </div>
+        <div className="row">
           {session.sheet_url && (
-            <a href={session.sheet_url} target="_blank" rel="noreferrer">
+            <a className="button-link primary" href={session.sheet_url} target="_blank" rel="noreferrer">
               Open Google Sheet
             </a>
           )}
-        </div>
-        <div className="row">
           <button onClick={() => void forceSave()}>Save Now</button>
           <button onClick={() => void handleSyncSheet()}>Sync Sheet</button>
           <button className="danger" onClick={() => void handleResetSheet()}>Reset Sheet (Test)</button>
