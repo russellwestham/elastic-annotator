@@ -96,6 +96,31 @@ export async function fetchEvents(sessionId: string): Promise<EventListResponse>
   return request<EventListResponse>(`/api/sessions/${sessionId}/events`);
 }
 
+function sessionPriority(session: SessionStatus): number {
+  const videoCount = session.video_urls?.length ?? 0;
+  if (session.status === "ready" && videoCount > 0) return 0;
+  if (session.status === "processing") return 1;
+  if (session.status === "ready") return 2;
+  return 3;
+}
+
+function sessionUpdatedAtValue(session: SessionStatus): number {
+  return new Date(session.updated_at).getTime() || 0;
+}
+
+export async function fetchLatestSessionForMatch(matchId: string): Promise<SessionStatus | null> {
+  const sessions = await fetchSessions({ matchId, limit: 100 });
+  if (sessions.length === 0) {
+    return null;
+  }
+  const ranked = [...sessions].sort((a, b) => {
+    const p = sessionPriority(a) - sessionPriority(b);
+    if (p !== 0) return p;
+    return sessionUpdatedAtValue(b) - sessionUpdatedAtValue(a);
+  });
+  return ranked[0] ?? null;
+}
+
 export async function saveEvents(sessionId: string, events: EventRow[]): Promise<{
   ok: boolean;
   saved_count: number;

@@ -5,6 +5,7 @@ import {
   clearSheetMapping,
   createSession,
   fetchDefaultDatasetRoot,
+  fetchLatestSessionForMatch,
   fetchMatches,
   fetchSessions,
   fetchSession,
@@ -44,6 +45,7 @@ export function SessionCreatePage() {
   const [defaultDatasetExists, setDefaultDatasetExists] = useState<boolean>(false);
   const [recentSessions, setRecentSessions] = useState<SessionStatus[]>([]);
   const [loadingRecentSessions, setLoadingRecentSessions] = useState(false);
+  const [openingLatest, setOpeningLatest] = useState(false);
 
   const selectedMatchLabel = useMemo(() => {
     const selected = matches.find((m) => m.match_id === matchId);
@@ -224,6 +226,27 @@ export function SessionCreatePage() {
     }
   };
 
+  const handleOpenLatest = async () => {
+    if (!matchId) {
+      setError("match_id is required");
+      return;
+    }
+    setOpeningLatest(true);
+    setError(null);
+    try {
+      const latest = await fetchLatestSessionForMatch(matchId);
+      if (!latest) {
+        setError(`No session found for match_id=${matchId}`);
+        return;
+      }
+      navigate(`/annotate/${latest.session_id}`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setOpeningLatest(false);
+    }
+  };
+
   const handleSaveSheetMapping = async () => {
     if (!matchId) {
       setError("match_id is required");
@@ -362,9 +385,19 @@ export function SessionCreatePage() {
           Generate full animation video now
         </label>
 
-        <button type="button" className="primary" onClick={handleCreate} disabled={creating}>
-          {creating ? "Creating..." : "Create Session"}
-        </button>
+        <div className="row">
+          <button type="button" className="primary" onClick={handleCreate} disabled={creating}>
+            {creating ? "Creating..." : "Create Session"}
+          </button>
+          <button type="button" onClick={handleOpenLatest} disabled={openingLatest || !matchId}>
+            {openingLatest ? "Opening..." : "Open latest"}
+          </button>
+          {matchId && (
+            <a href={`/m/${encodeURIComponent(matchId)}`} target="_blank" rel="noreferrer">
+              Open latest (new tab)
+            </a>
+          )}
+        </div>
 
         {selectedMatchLabel && <p className="muted">Selected: {selectedMatchLabel}</p>}
       </div>
