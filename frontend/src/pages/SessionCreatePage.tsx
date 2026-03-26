@@ -148,7 +148,7 @@ export function SessionCreatePage() {
         setStatus(next);
         if (next.status === "ready") {
           window.clearInterval(timer);
-          navigate(`/annotate/${next.session_id}`);
+          navigate(`/annotate/m/${encodeURIComponent(next.match_id)}`);
         }
         if (next.status === "error") {
           window.clearInterval(timer);
@@ -209,10 +209,6 @@ export function SessionCreatePage() {
   };
 
   const handleCreate = async () => {
-    if (!annotatorName.trim()) {
-      setError("annotator name is required");
-      return;
-    }
     if (!matchId) {
       setError("match_id is required");
       return;
@@ -230,8 +226,9 @@ export function SessionCreatePage() {
         setSheetMessage("Sheet mapping saved");
       }
 
+      const normalizedAnnotator = annotatorName.trim() || "kunhee";
       const created = await createSession({
-        annotator_name: annotatorName.trim(),
+        annotator_name: normalizedAnnotator,
         match_id: matchId,
         dataset_root: datasetRoot.trim() || undefined,
         generate_video: generateVideo,
@@ -450,7 +447,8 @@ export function SessionCreatePage() {
                 <th>Session ID</th>
                 <th>Status</th>
                 <th>Sheet</th>
-                <th>Open</th>
+                <th>Open Sheet</th>
+                <th>Open Annotate</th>
               </tr>
             </thead>
             <tbody>
@@ -480,14 +478,19 @@ export function SessionCreatePage() {
                   </td>
                   <td>
                     <a href={`/m/${encodeURIComponent(session.match_id)}`} target="_blank" rel="noreferrer">
-                      Open match
+                      {`/m/${session.match_id}`}
+                    </a>
+                  </td>
+                  <td>
+                    <a href={`/annotate/m/${encodeURIComponent(session.match_id)}`} target="_blank" rel="noreferrer">
+                      {`/annotate/m/${session.match_id}`}
                     </a>
                   </td>
                 </tr>
               ))}
               {recentSessions.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="muted">
+                  <td colSpan={7} className="muted">
                     No sessions yet.
                   </td>
                 </tr>

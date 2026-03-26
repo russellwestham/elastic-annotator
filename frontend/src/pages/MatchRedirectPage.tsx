@@ -6,7 +6,7 @@ import { fetchLatestSessionForMatch, fetchSheetMapping } from "../api";
 export function MatchRedirectPage() {
   const { matchId = "" } = useParams();
   const [error, setError] = useState<string | null>(null);
-  const [fallbackSessionId, setFallbackSessionId] = useState<string | null>(null);
+  const [hasFallbackSession, setHasFallbackSession] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -30,14 +30,14 @@ export function MatchRedirectPage() {
         const latest = await fetchLatestSessionForMatch(normalizedMatchId);
         if (cancelled) return;
         if (latest?.session_id) {
-          setFallbackSessionId(latest.session_id);
+          setHasFallbackSession(true);
         }
         setError(`No mapped Google Sheet for match_id=${normalizedMatchId}`);
       } catch (err) {
         if (cancelled) return;
         const latest = await fetchLatestSessionForMatch(normalizedMatchId);
         if (!cancelled && latest?.session_id) {
-          setFallbackSessionId(latest.session_id);
+          setHasFallbackSession(true);
         }
         setError((err as Error).message);
       }
@@ -65,11 +65,11 @@ export function MatchRedirectPage() {
       <div className="card">
         <h2>Cannot open match sheet</h2>
         <pre className="error-box">{error}</pre>
-        {fallbackSessionId && (
+        {hasFallbackSession && (
           <p>
             Latest session:{" "}
-            <a href={`/annotate/${fallbackSessionId}`} target="_blank" rel="noreferrer">
-              /annotate/{fallbackSessionId}
+            <a href={`/annotate/m/${encodeURIComponent(matchId)}`} target="_blank" rel="noreferrer">
+              /annotate/m/{matchId}
             </a>
           </p>
         )}

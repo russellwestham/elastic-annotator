@@ -9,6 +9,16 @@ from backend.app.core.settings import Settings
 logger = logging.getLogger(__name__)
 SHEET_URL_PATTERN = re.compile(r"/spreadsheets/d/([a-zA-Z0-9-_]+)")
 SHEET_ID_PATTERN = re.compile(r"^[a-zA-Z0-9-_]+$")
+DEFAULT_ANNOTATOR_NAME = "kunhee"
+SYSTEM_ANNOTATOR_NAMES = {
+    "",
+    "server-render-queue",
+    "server_render_queue",
+    "system",
+    "unknown",
+    "none",
+    "null",
+}
 
 
 class GoogleSheetsService:
@@ -64,6 +74,13 @@ class GoogleSheetsService:
             f"ELASTIC_ANNOTATOR_{match_id}",
             match_id,
         ]
+
+    @staticmethod
+    def _normalize_annotator_name(annotator_name: str | None) -> str:
+        normalized = (annotator_name or "").strip()
+        if normalized.lower() in SYSTEM_ANNOTATOR_NAMES:
+            return DEFAULT_ANNOTATOR_NAME
+        return normalized
 
     def _open_target_sheet(
         self,
@@ -138,7 +155,7 @@ class GoogleSheetsService:
         sheet_id: str | None = None,
     ) -> str:
         client = self._authorize()
-        annotator_key = annotator_name.strip()
+        annotator_key = self._normalize_annotator_name(annotator_name)
         sheet = self._open_target_sheet(client, match_id, create_if_missing=True, sheet_id=sheet_id)
 
         worksheet = None
@@ -148,7 +165,7 @@ class GoogleSheetsService:
                 break
 
         if worksheet is None:
-            worksheet_title = annotator_key.title() if annotator_key else "Annotator"
+            worksheet_title = annotator_key if annotator_key else DEFAULT_ANNOTATOR_NAME
             worksheet = sheet.add_worksheet(title=worksheet_title, rows=2000, cols=20)
 
         columns = [
