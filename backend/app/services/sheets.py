@@ -238,6 +238,34 @@ class GoogleSheetsService:
             "sheet_tab_url": self.build_sheet_tab_url(sheet_url, worksheet_gid),
         }
 
+    def worksheet_exists(
+        self,
+        match_id: str,
+        *,
+        sheet_id: str | None,
+        worksheet_name: str | None = None,
+        worksheet_gid: str | None = None,
+    ) -> bool:
+        if not self.enabled:
+            return True
+        if not sheet_id:
+            return False
+        target_name = (worksheet_name or "").strip().lower()
+        target_gid = (worksheet_gid or "").strip()
+        if not target_name and not target_gid:
+            return False
+
+        client = self._authorize()
+        sheet = self._open_target_sheet(client, match_id, create_if_missing=False, sheet_id=sheet_id)
+        for ws in sheet.worksheets():
+            gid = str(getattr(ws, "id", "") or "")
+            title = str(getattr(ws, "title", "") or "").strip().lower()
+            if target_gid and gid == target_gid:
+                return True
+            if target_name and title == target_name:
+                return True
+        return False
+
     def reset_sheet(self, match_id: str, sheet_id: str | None = None) -> str:
         client = self._authorize()
         sheet = self._open_target_sheet(client, match_id, create_if_missing=False, sheet_id=sheet_id)

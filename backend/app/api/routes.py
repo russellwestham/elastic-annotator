@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +37,8 @@ sheet_mappings = SheetMappingStore(settings.sheet_mappings_path)
 pipeline = ElasticPipelineService(settings, store, sheets, sheet_mappings)
 
 router = APIRouter(prefix="/api", tags=["api"])
+SHEET_TAB_CHECK_CACHE: dict[str, tuple[float, bool]] = {}
+SHEET_TAB_CHECK_CACHE_TTL_SEC = 60.0
 
 
 def _spawn_session_build(session_id: str) -> None:
@@ -101,6 +104,104 @@ def _to_status_response(metadata: dict) -> SessionStatusResponse:
         sheet_gid=sheet_gid,
         sheet_tab_url=sheet_tab_url,
     )
+
+
+def _session_has_video_artifact(metadata: dict) -> bool:
+    session_id = str(metadata.get("session_id") or "").strip()
+    if not session_id:
+        return False
+
+    video_urls = metadata.get("video_urls") or []
+    video_url = metadata.get("video_url")
+    if isinstance(video_url, str) and video_url and video_url not in video_urls:
+        video_urls = [video_url, *video_urls]
+
+    if not video_urls:
+        return False
+
+    has_any = False
+    prefix = f"/artifacts/sessions/{session_id}/"
+    session_dir = store.session_dir(session_id)
+    for item in video_urls:
+        url = str(item or "")
+        if not url:
+            continue
+        if url.startswith("http://") or url.startswith("https://"):
+            has_any = True
+            continue
+        if url.startswith(prefix):
+            filename = url.split("/")[-1]
+            if filename and (session_dir / filename).exists():
+                has_any = True
+    return has_any
+
+
+def _session_has_valid_sheet_tab(metadata: dict) -> bool:
+    if not sheets.enabled:
+        return True
+
+    match_id = str(metadata.get("match_id") or "").strip()
+    sheet_tab_name = str(metadata.get("sheet_tab_name") or "").strip()
+    sheet_gid = str(metadata.get("sheet_gid") or "").strip()
+    if not sheet_tab_name and not sheet_gid:
+        return False
+
+    sheet_id = sheet_mappings.get_sheet_id(match_id)
+    if not sheet_id:
+        sheet_url = str(metadata.get("sheet_url") or "").strip()
+        if sheet_url:
+            try:
+                sheet_id = sheets.normalize_sheet_id(sheet_url)
+            except ValueError:
+                sheet_id = None
+    if not sheet_id:
+        return False
+
+    cache_key = f"{match_id}|{sheet_id}|{sheet_tab_name.lower()}|{sheet_gid}"
+    now = time.monotonic()
+    cached = SHEET_TAB_CHECK_CACHE.get(cache_key)
+    if cached is not None:
+        checked_at, exists = cached
+        if now - checked_at <= SHEET_TAB_CHECK_CACHE_TTL_SEC:
+            return exists
+
+    try:
+        exists = sheets.worksheet_exists(
+            match_id,
+            sheet_id=sheet_id,
+            worksheet_name=sheet_tab_name or None,
+            worksheet_gid=sheet_gid or None,
+        )
+    except Exception:
+        # Transient Google API failures should not immediately invalidate a ready session.
+        return True
+
+    SHEET_TAB_CHECK_CACHE[cache_key] = (now, exists)
+    return exists
+
+
+def _ensure_ready_session_integrity(metadata: dict) -> dict:
+    if metadata.get("status") != "ready":
+        return metadata
+
+    reasons: list[str] = []
+    if not _session_has_video_artifact(metadata):
+        reasons.append("video_not_prepared")
+    if not _session_has_valid_sheet_tab(metadata):
+        reasons.append("sheet_tab_missing_or_invalid")
+
+    if not reasons:
+        return metadata
+
+    session_id = str(metadata.get("session_id") or "")
+    reason_text = ", ".join(reasons)
+    updated = store.update_metadata(
+        session_id,
+        status="error",
+        progress="invalid_ready_state",
+        error_message=f"Session marked invalid from ready: {reason_text}",
+    )
+    return updated
 
 
 def _to_sheet_mapping_response(match_id: str, sheet_id: str | None) -> SheetMappingResponse:
@@ -192,6 +293,7 @@ def get_session(session_id: str) -> SessionStatusResponse:
         metadata = store.load_metadata(session_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    metadata = _ensure_ready_session_integrity(metadata)
     return _to_status_response(metadata)
 
 
@@ -203,12 +305,22 @@ def list_sessions(
 ) -> list[SessionStatusResponse]:
     if status is not None and status not in {"processing", "ready", "error"}:
         raise HTTPException(status_code=400, detail="status must be one of: processing, ready, error")
-    sessions = store.list_sessions(limit=limit, status=status, match_id=match_id)
+    base_limit = 100_000 if status is not None else limit
+    sessions = store.list_sessions(limit=base_limit, status=None, match_id=match_id)
+    normalized: list[dict] = []
+    for metadata in sessions:
+        normalized.append(_ensure_ready_session_integrity(metadata))
+    if status is not None:
+        normalized = [metadata for metadata in normalized if metadata.get("status") == status]
+    sessions = normalized[: max(1, limit)]
     return [_to_status_response(metadata) for metadata in sessions]
 
 
 @router.post("/maintenance/prune-sessions")
 def prune_sessions(keep_processing: bool = Query(default=True)) -> dict[str, object]:
+    snapshots = store.list_sessions(limit=100_000, status=None, match_id=None)
+    for metadata in snapshots:
+        _ensure_ready_session_integrity(metadata)
     return store.prune_keep_latest_alive(keep_processing=keep_processing)
 
 
