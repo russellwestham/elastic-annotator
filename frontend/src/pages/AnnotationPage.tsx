@@ -464,7 +464,9 @@ export function AnnotationPage() {
       }
       const startTs = formatSeconds(range.start / fps);
       const endTs = formatSeconds(range.end / fps);
-      return `Segment ${idx + 1} | t ${startTs}-${endTs} | f ${range.start}-${range.end}`;
+      const startFrame = range.start.toLocaleString("en-US");
+      const endFrame = range.end.toLocaleString("en-US");
+      return `Segment ${idx + 1} | Time ${startTs} - ${endTs} | Frames ${startFrame} - ${endFrame}`;
     });
   }, [fps, segmentRanges, videoCandidates]);
 
