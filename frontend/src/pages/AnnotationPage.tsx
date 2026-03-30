@@ -456,6 +456,17 @@ export function AnnotationPage() {
   const segmentRanges = useMemo(() => {
     return videoCandidates.map((path) => parseSegmentFrameRange(path));
   }, [videoCandidates]);
+  const segmentOptionLabels = useMemo(() => {
+    return videoCandidates.map((_, idx) => {
+      const range = segmentRanges[idx];
+      if (!range) {
+        return `Segment ${idx + 1}`;
+      }
+      const startTs = formatSeconds(range.start / fps);
+      const endTs = formatSeconds(range.end / fps);
+      return `Segment ${idx + 1} | t ${startTs}-${endTs} | f ${range.start}-${range.end}`;
+    });
+  }, [fps, segmentRanges, videoCandidates]);
 
   const segmentStartFrame = useMemo(() => {
     if (segmentRanges.length === 0) return 0;
@@ -1159,7 +1170,7 @@ export function AnnotationPage() {
                   >
                     {videoCandidates.map((url, idx) => (
                       <option key={url} value={idx}>
-                        Segment {idx + 1}
+                        {segmentOptionLabels[idx] ?? `Segment ${idx + 1}`}
                       </option>
                     ))}
                   </select>
