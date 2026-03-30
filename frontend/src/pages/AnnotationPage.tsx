@@ -743,13 +743,13 @@ export function AnnotationPage() {
         }
       } else if (event.key === "ArrowLeft") {
         event.preventDefault();
-        const step = event.shiftKey ? 1 / fps : KEYBOARD_SEEK_SECONDS;
+        const step = event.shiftKey ? KEYBOARD_SEEK_SECONDS : 1 / fps;
         const nextTime = Math.max(0, videoRef.current.currentTime - step);
         videoRef.current.currentTime = nextTime;
         setCurrentTime(nextTime);
       } else if (event.key === "ArrowRight") {
         event.preventDefault();
-        const step = event.shiftKey ? 1 / fps : KEYBOARD_SEEK_SECONDS;
+        const step = event.shiftKey ? KEYBOARD_SEEK_SECONDS : 1 / fps;
         const nextTime = Math.max(0, videoRef.current.currentTime + step);
         videoRef.current.currentTime = nextTime;
         setCurrentTime(nextTime);
@@ -1216,12 +1216,12 @@ export function AnnotationPage() {
                   Play / Pause (Space)
                 </button>
                 <button onClick={() => jump(5)}>+5s</button>
-                <button onClick={() => jump(-KEYBOARD_SEEK_SECONDS)}>-0.2s (←)</button>
-                <button onClick={() => jump(KEYBOARD_SEEK_SECONDS)}>+0.2s (→)</button>
-                <button onClick={() => jump(-1 / fps)}>Prev Frame (Shift+←)</button>
-                <button onClick={() => jump(1 / fps)}>Next Frame (Shift+→)</button>
+                <button onClick={() => jump(-1 / fps)}>Prev Frame (←)</button>
+                <button onClick={() => jump(1 / fps)}>Next Frame (→)</button>
+                <button onClick={() => jump(-KEYBOARD_SEEK_SECONDS)}>-0.2s (Shift+←)</button>
+                <button onClick={() => jump(KEYBOARD_SEEK_SECONDS)}>+0.2s (Shift+→)</button>
               </div>
-              <p className="muted">Tip: ←/→ 는 0.2초 이동, Shift+←/→ 는 1프레임 이동</p>
+              <p className="muted">Tip: ←/→ 는 1프레임 이동, Shift+←/→ 는 0.2초 이동</p>
             </>
           ) : (
             <p>No video generated for this session.</p>
