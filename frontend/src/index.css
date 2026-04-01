@@ -841,9 +841,6 @@ a.button-link.primary .spinner {
 }
 
 .annot-header {
-  position: sticky;
-  top: 0.75rem;
-  z-index: 15;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
