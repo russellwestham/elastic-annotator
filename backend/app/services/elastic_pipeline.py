@@ -199,15 +199,27 @@ class ElasticPipelineService:
                 "sheet_gid": None,
                 "sheet_tab_url": None,
             }
+            sheet_sync_error: str | None = None
             if self.sheets.enabled:
                 self.store.update_metadata(session_id, progress="syncing_google_sheets")
                 mapped_sheet_id = self.sheet_mappings.get_sheet_id(match_id)
-                sheet_meta = self.sheets.upsert_annotations(
-                    match_id,
-                    annotator_name,
-                    rows,
-                    sheet_id=mapped_sheet_id,
-                )
+                try:
+                    sheet_meta = self.sheets.upsert_annotations(
+                        match_id,
+                        annotator_name,
+                        rows,
+                        sheet_id=mapped_sheet_id,
+                    )
+                except Exception as exc:
+                    # Do not fail the whole session when Google Sheets provisioning/sync fails.
+                    # Video + event artifacts are still usable for annotation workflows.
+                    sheet_sync_error = str(exc)
+                    logger.warning(
+                        "Session %s finished without Google Sheets sync: %s",
+                        session_id,
+                        exc,
+                        exc_info=True,
+                    )
 
             self.store.update_metadata(
                 session_id,
@@ -221,6 +233,7 @@ class ElasticPipelineService:
                 sheet_tab_name=sheet_meta.get("sheet_tab_name"),
                 sheet_gid=sheet_meta.get("sheet_gid"),
                 sheet_tab_url=sheet_meta.get("sheet_tab_url"),
+                sheet_sync_error=sheet_sync_error,
             )
 
         except Exception as exc:
@@ -252,6 +265,7 @@ class ElasticPipelineService:
             sheet_tab_name=sheet_meta.get("sheet_tab_name"),
             sheet_gid=sheet_meta.get("sheet_gid"),
             sheet_tab_url=sheet_meta.get("sheet_tab_url"),
+            sheet_sync_error=None,
         )
         return sheet_meta.get("sheet_url")
 
@@ -263,7 +277,7 @@ class ElasticPipelineService:
         match_id = metadata["match_id"]
         mapped_sheet_id = self.sheet_mappings.get_sheet_id(match_id)
         sheet_url = self.sheets.reset_sheet(match_id, sheet_id=mapped_sheet_id)
-        self.store.update_metadata(session_id, sheet_url=sheet_url)
+        self.store.update_metadata(session_id, sheet_url=sheet_url, sheet_sync_error=None)
         return sheet_url
 
     def reset_events_to_initial(self, session_id: str) -> tuple[list[dict], str]:

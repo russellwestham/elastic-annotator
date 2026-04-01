@@ -43,6 +43,7 @@ export interface SessionStatus {
   sheet_tab_name?: string | null;
   sheet_gid?: string | null;
   sheet_tab_url?: string | null;
+  sheet_sync_error?: string | null;
 }
 
 export interface EventRow {

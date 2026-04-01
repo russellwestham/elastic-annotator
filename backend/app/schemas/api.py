@@ -83,6 +83,7 @@ class SessionStatusResponse(BaseModel):
     sheet_tab_name: str | None = None
     sheet_gid: str | None = None
     sheet_tab_url: str | None = None
+    sheet_sync_error: str | None = None
 
 
 class EventListResponse(BaseModel):

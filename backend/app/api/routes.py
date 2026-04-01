@@ -103,6 +103,7 @@ def _to_status_response(metadata: dict) -> SessionStatusResponse:
         sheet_tab_name=sheet_tab_name,
         sheet_gid=sheet_gid,
         sheet_tab_url=sheet_tab_url,
+        sheet_sync_error=metadata.get("sheet_sync_error"),
     )
 
 
@@ -138,6 +139,9 @@ def _session_has_video_artifact(metadata: dict) -> bool:
 
 def _session_has_valid_sheet_tab(metadata: dict) -> bool:
     if not sheets.enabled:
+        return True
+    if metadata.get("sheet_sync_error"):
+        # Known sync/provisioning failure should not invalidate ready video sessions.
         return True
 
     match_id = str(metadata.get("match_id") or "").strip()
@@ -434,6 +438,7 @@ def save_events(session_id: str, request: EventSaveRequest) -> EventSaveResponse
             pipeline.sync_sheet(session_id)
             sheet_synced = True
         except Exception as exc:
+            store.update_metadata(session_id, sheet_sync_error=str(exc))
             warnings.append(f"google sheet sync failed: {exc}")
 
     return EventSaveResponse(
@@ -454,7 +459,10 @@ def sync_sheet(session_id: str) -> dict[str, str | None]:
     if not sheets.enabled:
         raise HTTPException(status_code=400, detail="Google Sheets integration is disabled")
 
-    url = pipeline.sync_sheet(session_id)
+    try:
+        url = pipeline.sync_sheet(session_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"sheet_url": url}
 
 

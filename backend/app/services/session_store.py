@@ -46,6 +46,7 @@ class SessionStore:
             "sheet_tab_name": None,
             "sheet_gid": None,
             "sheet_tab_url": None,
+            "sheet_sync_error": None,
             "created_at": created_at,
             "updated_at": created_at,
         }
@@ -253,6 +254,7 @@ class SessionStore:
                     "sheet_tab_name": None,
                     "sheet_gid": None,
                     "sheet_tab_url": None,
+                    "sheet_sync_error": None,
                     "updated_at": self._now_iso(),
                 }
             )
