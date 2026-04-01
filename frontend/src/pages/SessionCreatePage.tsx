@@ -30,7 +30,7 @@ function getPersistLabel(session: SessionStatus): string {
   if (session.session_mode !== "upload_csv") {
     return "-";
   }
-  return session.persist ? "Saved" : "Ephemeral";
+  return session.persist ? "Saved" : "Temporary";
 }
 
 export function SessionCreatePage() {
@@ -173,7 +173,7 @@ export function SessionCreatePage() {
 
   const handleCreateUpload = async () => {
     if (!uploadVideoFile || !uploadCsvFile) {
-      setError("video.mp4와 events_seed.csv를 모두 선택하세요.");
+      setError("Select both a video file and a CSV file.");
       return;
     }
 
@@ -320,16 +320,16 @@ export function SessionCreatePage() {
 
             <div className="create-actions">
               <button type="button" className="primary" onClick={handleOpenLatest} disabled={openingLatest || !matchId}>
-                {openingLatest ? "Opening..." : "Open Latest"}
+                {openingLatest ? "Opening..." : "Open Latest Session"}
               </button>
               <button type="button" onClick={handleCreateExisting} disabled={creating}>
-                {creating ? "Creating..." : "Create Session"}
+                {creating ? "Creating..." : "Create New Session"}
               </button>
             </div>
 
             {defaultDatasetRoot && datasetRoot.trim() === defaultDatasetRoot && (
               <p className="muted compact-note">
-                {defaultDatasetExists ? "Default dataset ready" : "Default dataset not found"}
+                {defaultDatasetExists ? "Default dataset available" : "Default dataset unavailable"}
               </p>
             )}
           </div>
@@ -360,10 +360,10 @@ export function SessionCreatePage() {
                   {uploadVideoFile ? <span className="upload-card-state">Selected</span> : null}
                 </span>
                 <span className="upload-card-value">
-                  {uploadVideoFile?.name ?? "Drop or click"}
+                  {uploadVideoFile?.name ?? "Drop file or click"}
                 </span>
                 <span className="upload-card-meta">
-                  {uploadVideoFile ? "Replace file" : "MP4, MOV, M4V, WEBM"}
+                  {uploadVideoFile ? "Choose another file" : "MP4, MOV, M4V, WEBM"}
                 </span>
                 <input
                   type="file"
@@ -391,10 +391,10 @@ export function SessionCreatePage() {
                   {uploadCsvFile ? <span className="upload-card-state">Selected</span> : null}
                 </span>
                 <span className="upload-card-value">
-                  {uploadCsvFile?.name ?? "Drop or click"}
+                  {uploadCsvFile?.name ?? "Drop file or click"}
                 </span>
                 <span className="upload-card-meta">
-                  {uploadCsvFile ? "Replace file" : "events_seed.csv"}
+                  {uploadCsvFile ? "Choose another file" : "events_seed.csv"}
                 </span>
                 <input
                   type="file"
@@ -406,7 +406,7 @@ export function SessionCreatePage() {
 
             <div className="create-actions upload-actions">
               <button type="button" className="primary" onClick={handleCreateUpload} disabled={creating}>
-                {creating ? "Uploading..." : "Upload and Open"}
+                {creating ? "Uploading..." : "Open in Editor"}
               </button>
               <label className="check-row compact-check">
                 <input
@@ -414,7 +414,7 @@ export function SessionCreatePage() {
                   checked={persistUpload}
                   onChange={(e) => setPersistUpload(e.target.checked)}
                 />
-                Save this session
+                Keep on server
               </label>
             </div>
           </div>
@@ -426,7 +426,7 @@ export function SessionCreatePage() {
           <div className="section-header">
             <h2>Recent Sessions</h2>
             <button type="button" onClick={() => void loadRecentSessions()} disabled={loadingRecentSessions}>
-              {loadingRecentSessions ? "Refreshing..." : "Refresh"}
+              {loadingRecentSessions ? "Refreshing..." : "Refresh List"}
             </button>
           </div>
           <div className="table-wrap session-table-wrap">

@@ -384,15 +384,15 @@ export function AnnotationPage() {
     && isDraftReceiverIdValid
   );
   const confirmBlockedReason = !selectedRow || !draftRow
-    ? "선택된 row가 없습니다."
+    ? "No row selected."
     : !hasPendingRowChanges
-      ? "수정된 내용이 없습니다."
+      ? "No edits to apply."
       : !draftRow.error_type
-        ? "error_type을 선택해야 합니다."
+        ? "Select an error_type."
         : !isDraftPlayerIdValid
-          ? "player_id 형식을 확인하세요."
+          ? "Check player_id."
           : !isDraftReceiverIdValid
-            ? "receiver_id 형식을 확인하세요."
+            ? "Check receiver_id."
             : "";
   const syncedTimingPoints = useMemo(() => {
     const points: Array<{ periodId: number; frameId: number; offset: number }> = [];
@@ -479,12 +479,12 @@ export function AnnotationPage() {
   const currentFrame = segmentStartFrame + Math.round(currentTime * fps);
   const selectedFrameDelta = selectedAnchorFrame === null ? null : selectedAnchorFrame - currentFrame;
   const saveStateLabel = saveState === "saving"
-    ? "Saving"
+    ? "Saving changes"
     : saveState === "saved"
-      ? "Saved"
+      ? "All changes saved"
       : saveState === "error"
-        ? "Error"
-        : "Idle";
+        ? "Save failed"
+        : "Ready";
   const sessionLabel = session?.session_name?.trim() || session?.match_id || "Session";
   const originalCsvExportUrl = sessionId ? buildSessionCsvExportUrl(sessionId, "initial") : "";
   const editedCsvExportUrl = sessionId ? buildSessionCsvExportUrl(sessionId, "current") : "";
@@ -636,7 +636,7 @@ export function AnnotationPage() {
         setDirty(normalized.changed);
         if (normalized.changed) {
           setSaveState("saved");
-          setSaveMessage("Fixed missing-row timestamps from frame_id");
+          setSaveMessage("Recovered missing-row timestamps from frame_id");
         }
         try {
           const fetchedTypes = await fetchSpadlTypes();
@@ -685,7 +685,7 @@ export function AnnotationPage() {
           setDirty(normalized.changed);
           if (normalized.changed) {
             setSaveState("saved");
-            setSaveMessage("Fixed missing-row timestamps from frame_id");
+            setSaveMessage("Recovered missing-row timestamps from frame_id");
           }
         }
       }
@@ -705,7 +705,7 @@ export function AnnotationPage() {
         const result = await saveEvents(sessionId, events);
         setWarnings(result.validation_warnings);
         setSaveState("saved");
-        setSaveMessage(`Autosaved ${result.saved_count} rows`);
+        setSaveMessage(`Saved ${result.saved_count} rows`);
         setDirty(false);
       } catch (err) {
         setSaveState("error");
@@ -811,19 +811,19 @@ export function AnnotationPage() {
 
     if (!draftRow.error_type) {
       setSaveState("error");
-      setSaveMessage("행을 수정했다면 error_type을 반드시 선택해야 합니다.");
+      setSaveMessage("Select an error_type before applying changes.");
       return;
     }
 
     if (!isValidEntityId(draftRow.player_id, false, knownEntityIdSet)) {
       setSaveState("error");
-      setSaveMessage("player_id는 home/away 형식이거나 기존 항목(예: out_bottom)이어야 합니다.");
+      setSaveMessage("Select a valid player_id.");
       return;
     }
 
     if (!isValidEntityId(draftRow.receiver_id, true, knownEntityIdSet)) {
       setSaveState("error");
-      setSaveMessage("receiver_id는 비우거나 home/away 형식, 또는 기존 항목(예: out_bottom)이어야 합니다.");
+      setSaveMessage("Select a valid receiver_id or leave it blank.");
       return;
     }
 
@@ -922,7 +922,7 @@ export function AnnotationPage() {
 
   const jumpToWarningFrame = (frameId: number) => {
     if (hasPendingRowChanges) {
-      const discard = window.confirm("현재 row 수정사항이 확정되지 않았습니다. 버리고 이동할까요?");
+      const discard = window.confirm("You have unapplied changes in this row. Discard them and continue?");
       if (!discard) {
         return;
       }
@@ -949,7 +949,7 @@ export function AnnotationPage() {
 
   const handleSelectEvent = (index: number) => {
     if (index !== selectedIndex && hasPendingRowChanges) {
-      const discard = window.confirm("현재 row 수정사항이 확정되지 않았습니다. 버리고 이동할까요?");
+      const discard = window.confirm("You have unapplied changes in this row. Discard them and continue?");
       if (!discard) {
         return;
       }
@@ -1018,7 +1018,7 @@ export function AnnotationPage() {
       return;
     }
 
-    const confirmed = window.confirm("선택한 이벤트 row를 삭제할까요?");
+    const confirmed = window.confirm("Delete this row?");
     if (!confirmed) {
       return;
     }
@@ -1034,7 +1034,7 @@ export function AnnotationPage() {
     if (!sessionId) return;
 
     const confirmed = window.confirm(
-      "초기 이벤트 상태로 되돌릴까요?\n현재 수정사항은 사라집니다.",
+      "Reset all edits to the original CSV?\nThis will discard your current changes.",
     );
     if (!confirmed) {
       return;
@@ -1049,8 +1049,8 @@ export function AnnotationPage() {
       setSaveState("saved");
       setSaveMessage(
         result.source === "snapshot"
-          ? `Timeline reset to initial snapshot (${result.restored_count} rows)`
-          : `Timeline reset by recompute (${result.restored_count} rows)`,
+          ? `Restored original CSV (${result.restored_count} rows)`
+          : `Restored original events (${result.restored_count} rows)`,
       );
       const latest = await fetchSession(sessionId);
       setSession(latest);
@@ -1071,7 +1071,7 @@ export function AnnotationPage() {
   };
 
   if (loading) {
-    return <div className="page">Loading session...</div>;
+    return <div className="page">Loading editor...</div>;
   }
 
   if (!session) {
@@ -1084,7 +1084,7 @@ export function AnnotationPage() {
         <section className="card status-panel">
           <h1>{sessionLabel}</h1>
           <p className="muted">{session.progress ?? "processing"}</p>
-          <Link className="button-link" to="/">Back</Link>
+          <Link className="button-link" to="/">Back to Sessions</Link>
         </section>
       </div>
     );
@@ -1096,7 +1096,7 @@ export function AnnotationPage() {
         <section className="card status-panel">
           <h1>{sessionLabel}</h1>
           <pre className="error-box">{session.error_message}</pre>
-          <Link className="button-link" to="/">Back</Link>
+          <Link className="button-link" to="/">Back to Sessions</Link>
         </section>
       </div>
     );
@@ -1110,20 +1110,20 @@ export function AnnotationPage() {
           <div className="annot-meta">
             <span className="meta-pill">{fps} fps</span>
             <span className="meta-pill">{events.length} rows</span>
-            <span className="meta-pill">{isUploadSession ? "Upload CSV" : "Existing Data"}</span>
-            {isUploadSession && <span className="meta-pill">{session.persist ? "Saved" : "Ephemeral"}</span>}
+            <span className="meta-pill">{isUploadSession ? "Uploaded CSV" : "Public Dataset"}</span>
+            {isUploadSession && <span className="meta-pill">{session.persist ? "Saved" : "Temporary"}</span>}
             <span className={`status-chip ${saveState}`} aria-live="polite">
               {saveState === "saving" && <span className="spinner" aria-hidden="true" />}
-              Save {saveStateLabel}
+              {saveStateLabel}
             </span>
           </div>
         </div>
         <div className="row annot-actions">
           <a className="button-link" href={originalCsvExportUrl}>
-            Original CSV
+            Download Original CSV
           </a>
           <a className="button-link primary" href={editedCsvExportUrl}>
-            Edited CSV
+            Download Edited CSV
           </a>
           <button
             className="danger"
@@ -1131,9 +1131,9 @@ export function AnnotationPage() {
             disabled={resettingTimeline}
           >
             {resettingTimeline && <span className="spinner" aria-hidden="true" />}
-            {resettingTimeline ? "Resetting..." : "Reset Timeline"}
+            {resettingTimeline ? "Resetting..." : "Reset to Original"}
           </button>
-          <Link className="button-link" to="/">New Session</Link>
+          <Link className="button-link" to="/">Back to Sessions</Link>
         </div>
       </header>
 
@@ -1146,7 +1146,7 @@ export function AnnotationPage() {
             <>
               {videoCandidates.length > 1 && (
                 <label>
-                  Video Segment
+                  Segment
                   <select
                     value={selectedVideoIndex}
                     onChange={(e) => setSelectedVideoIndex(Number(e.target.value) || 0)}
@@ -1162,16 +1162,16 @@ export function AnnotationPage() {
               <div className="frame-readout">
                 <div className="frame-readout-grid">
                   <div>
-                    <div className="frame-readout-label">segment timestamp</div>
+                    <div className="frame-readout-label">Segment Time</div>
                     <div className="frame-readout-main">{formatSeconds(currentTime)}</div>
                   </div>
                   <div>
-                    <div className="frame-readout-label">absolute frame</div>
+                    <div className="frame-readout-label">Playhead Frame</div>
                     <div className="frame-readout-main frame-readout-frame">{currentFrame}</div>
                   </div>
                 </div>
                 <div className="frame-readout-sub">
-                  absolute timestamp {absoluteTimestamp} | segment frame {Math.round(currentTime * fps)}
+                  Absolute time {absoluteTimestamp} | Segment frame {Math.round(currentTime * fps)}
                 </div>
               </div>
               <video
@@ -1207,7 +1207,7 @@ export function AnnotationPage() {
                     }
                   }}
                 >
-                  Play / Pause (Space)
+                  Play / Pause
                 </button>
                 <button onClick={() => jump(5)}>+5s</button>
                 <button onClick={() => jump(-1 / fps)}>Prev Frame (←)</button>
@@ -1217,7 +1217,7 @@ export function AnnotationPage() {
               </div>
             </>
           ) : (
-            <p className="muted">Video unavailable.</p>
+            <p className="muted">No video available.</p>
           )}
         </section>
 
@@ -1226,17 +1226,17 @@ export function AnnotationPage() {
             <div className="section-header">
               <h2>Timeline</h2>
               <div className="section-actions">
-                <button onClick={addMissingRow}>Add Missing Row</button>
-                <button className="danger" disabled={!selectedRow} onClick={removeSelectedRow}>Remove Row</button>
+                <button onClick={addMissingRow}>Add Missing Event</button>
+                <button className="danger" disabled={!selectedRow} onClick={removeSelectedRow}>Delete Row</button>
               </div>
             </div>
             <div className="timeline-hud">
               <div className="timeline-hud-item">
-                <div className="timeline-hud-label">Current frame</div>
+                <div className="timeline-hud-label">Playhead</div>
                 <div className="timeline-hud-value">{currentFrame}</div>
               </div>
               <div className="timeline-hud-item">
-                <div className="timeline-hud-label">Selected frame</div>
+                <div className="timeline-hud-label">Selected</div>
                 <div className="timeline-hud-value">{selectedAnchorFrame ?? "-"}</div>
               </div>
               <div
@@ -1250,7 +1250,7 @@ export function AnnotationPage() {
                   .filter(Boolean)
                   .join(" ")}
               >
-                <div className="timeline-hud-label">Δ (selected - now)</div>
+                <div className="timeline-hud-label">Offset</div>
                 <div className="timeline-hud-value">
                   {selectedFrameDelta === null ? "-" : `${selectedFrameDelta > 0 ? "+" : ""}${selectedFrameDelta}`}
                 </div>
@@ -1266,15 +1266,15 @@ export function AnnotationPage() {
 
           <section className="inspector-panel card workspace-card">
             <div className="section-header">
-              <h2>{selectedRow ? `Inspector #${selectedIndex + 1}` : "Inspector"}</h2>
+              <h2>{selectedRow ? `Row #${selectedIndex + 1}` : "Inspector"}</h2>
               {selectedRow && (
                 <button
                   className="primary"
                   onClick={confirmRowChanges}
                   disabled={!canConfirmRowChanges}
-                  title={canConfirmRowChanges ? "현재 row 수정사항 확정" : confirmBlockedReason}
+                  title={canConfirmRowChanges ? "Apply changes to this row" : confirmBlockedReason}
                 >
-                  Confirm Row Changes
+                  Apply Changes
                 </button>
               )}
             </div>
@@ -1282,10 +1282,10 @@ export function AnnotationPage() {
             {selectedRow ? (
               <>
                 <div className="inspector-status">
-                  {hasPendingRowChanges && <span className="muted">미확정 수정사항 있음</span>}
-                  {isErrorTypeRequired && <span className="error-text">error_type을 선택해야 Confirm 가능합니다.</span>}
-                  {!canConfirmRowChanges && (
-                    <span className="muted">Confirm 비활성: {confirmBlockedReason}</span>
+                  <span className="muted">{hasPendingRowChanges ? "Unsaved changes" : "No changes yet."}</span>
+                  {isErrorTypeRequired && <span className="error-text">Select an error_type to apply changes.</span>}
+                  {!canConfirmRowChanges && hasPendingRowChanges && !isErrorTypeRequired && (
+                    <span className="muted">{confirmBlockedReason}</span>
                   )}
                 </div>
 
@@ -1336,7 +1336,7 @@ export function AnnotationPage() {
                       ))}
                     </select>
                     {!isDraftPlayerIdValid && (
-                      <p className="error-text id-format-help">player_id는 목록에서 선택하세요.</p>
+                      <p className="error-text id-format-help">Select a valid player_id.</p>
                     )}
                   </label>
 
@@ -1350,7 +1350,7 @@ export function AnnotationPage() {
                       />
                       <button type="button" onClick={() => applyCurrentTo("synced")}>Use Current</button>
                     </div>
-                    <p className="muted id-format-help">synced_ts 자동: {draftRow?.synced_ts ?? selectedRow.synced_ts ?? "-"}</p>
+                    <p className="muted id-format-help">synced_ts preview: {draftRow?.synced_ts ?? selectedRow.synced_ts ?? "-"}</p>
                   </label>
 
                   <label>
@@ -1371,7 +1371,7 @@ export function AnnotationPage() {
                       ))}
                     </select>
                     {!isDraftReceiverIdValid && (
-                      <p className="error-text id-format-help">receiver_id는 목록에서 선택하거나 비워두세요.</p>
+                      <p className="error-text id-format-help">Select a valid receiver_id or leave it blank.</p>
                     )}
                   </label>
 
@@ -1385,7 +1385,7 @@ export function AnnotationPage() {
                       />
                       <button type="button" onClick={() => applyCurrentTo("receive")}>Use Current</button>
                     </div>
-                    <p className="muted id-format-help">receive_ts 자동: {draftRow?.receive_ts ?? selectedRow.receive_ts ?? "-"}</p>
+                    <p className="muted id-format-help">receive_ts preview: {draftRow?.receive_ts ?? selectedRow.receive_ts ?? "-"}</p>
                   </label>
 
                   <label>
@@ -1414,10 +1414,10 @@ export function AnnotationPage() {
                       ))}
                     </select>
                     {isErrorTypeRequired && (
-                      <p className="error-text id-format-help">행 수정 시 error_type은 필수입니다.</p>
+                      <p className="error-text id-format-help">error_type is required to apply changes.</p>
                     )}
                     {!isErrorTypeRequired && hasPendingRowChanges && (
-                      <p className="muted id-format-help">변경 컬럼 기준으로 자동 선택됩니다. (동시 변경 시 왼쪽 컬럼 우선)</p>
+                      <p className="muted id-format-help">Auto-picked from the changed field. If several fields changed, the leftmost field wins.</p>
                     )}
                   </label>
                 </div>
@@ -1436,7 +1436,7 @@ export function AnnotationPage() {
                 </p>
               </>
             ) : (
-              <p className="muted">No event row selected.</p>
+              <p className="muted">Select a row to edit.</p>
             )}
           </section>
 
@@ -1456,7 +1456,7 @@ export function AnnotationPage() {
                               className="warning-frame-link"
                               onClick={() => jumpToWarningFrame(frameId)}
                             >
-                              frame {frameId}
+                              Frame {frameId}
                             </button>
                             <span>{item.body}</span>
                           </li>
