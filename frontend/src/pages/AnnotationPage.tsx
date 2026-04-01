@@ -3,13 +3,13 @@ import { Link, useParams } from "react-router-dom";
 
 import {
   buildArtifactUrl,
+  buildSessionCsvExportUrl,
   fetchEvents,
   fetchLatestSessionForMatch,
   fetchSession,
   fetchSpadlTypes,
   resetEvents,
   saveEvents,
-  syncSheet,
 } from "../api";
 import { EventTable } from "../components/EventTable";
 import type { ErrorType, EventRow, SessionStatus } from "../types";
@@ -343,8 +343,7 @@ export function AnnotationPage() {
   const [currentTime, setCurrentTime] = useState(0);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveMessage, setSaveMessage] = useState("");
-  const [syncingSheet, setSyncingSheet] = useState(false);
-  const [resettingSheet, setResettingSheet] = useState(false);
+  const [resettingTimeline, setResettingTimeline] = useState(false);
 
   const [dirty, setDirty] = useState(false);
   const [initialLoaded, setInitialLoaded] = useState(false);
@@ -355,6 +354,7 @@ export function AnnotationPage() {
 
   const selectedRow = events[selectedIndex] ?? null;
   const fps = session?.fps ?? 25;
+  const isUploadSession = session?.session_mode === "upload_csv";
   const hasPendingRowChanges = !!(selectedRow && draftRow && !isSameEventRow(selectedRow, draftRow));
   const isErrorTypeRequired = hasPendingRowChanges && !draftRow?.error_type;
   const selectedAnchorFrame = getAnchorFrame(selectedRow);
@@ -485,6 +485,9 @@ export function AnnotationPage() {
       : saveState === "error"
         ? "Error"
         : "Idle";
+  const sessionLabel = session?.session_name?.trim() || session?.match_id || "Session";
+  const originalCsvExportUrl = sessionId ? buildSessionCsvExportUrl(sessionId, "initial") : "";
+  const editedCsvExportUrl = sessionId ? buildSessionCsvExportUrl(sessionId, "current") : "";
   const getTimestampOffsetForPeriod = (periodId: number | null | undefined, nearFrame?: number): number => {
     const targetPeriod = typeof periodId === "number" && Number.isFinite(periodId) ? periodId : 1;
     if (typeof nearFrame === "number" && Number.isFinite(nearFrame)) {
@@ -1027,42 +1030,18 @@ export function AnnotationPage() {
     setDirty(true);
   };
 
-  const handleSyncSheet = async () => {
-    if (!sessionId) return;
-    if (hasPendingRowChanges) {
-      setSaveState("error");
-      setSaveMessage("먼저 Confirm Row Changes를 눌러 행 수정사항을 확정하세요.");
-      return;
-    }
-    if (syncingSheet || resettingSheet) return;
-    setSyncingSheet(true);
-    setSaveState("saving");
-    try {
-      const result = await syncSheet(sessionId);
-      setSaveState("saved");
-      setSaveMessage(result.sheet_url ? `Sheet synced: ${result.sheet_url}` : "Sheet sync complete");
-      const latest = await fetchSession(sessionId);
-      setSession(latest);
-    } catch (err) {
-      setSaveState("error");
-      setSaveMessage((err as Error).message);
-    } finally {
-      setSyncingSheet(false);
-    }
-  };
-
-  const handleResetSheet = async () => {
+  const handleResetTimeline = async () => {
     if (!sessionId) return;
 
     const confirmed = window.confirm(
-      "초기 이벤트 상태로 되돌릴까요?\n현재 수정사항은 사라지며, Event Timeline과 시트가 초기값으로 복원됩니다.",
+      "초기 이벤트 상태로 되돌릴까요?\n현재 수정사항은 사라집니다.",
     );
     if (!confirmed) {
       return;
     }
 
-    if (syncingSheet || resettingSheet) return;
-    setResettingSheet(true);
+    if (resettingTimeline) return;
+    setResettingTimeline(true);
     setSaveState("saving");
     try {
       const result = await resetEvents(sessionId);
@@ -1087,7 +1066,7 @@ export function AnnotationPage() {
       setSaveState("error");
       setSaveMessage((err as Error).message);
     } finally {
-      setResettingSheet(false);
+      setResettingTimeline(false);
     }
   };
 
@@ -1101,21 +1080,24 @@ export function AnnotationPage() {
 
   if (session.status === "processing") {
     return (
-      <div className="page">
-        <h1>Preparing Session</h1>
-        <p>Session: {session.session_id}</p>
-        <p>Progress: {session.progress ?? "processing"}</p>
-        <Link to="/">Back</Link>
+      <div className="page page-create">
+        <section className="card status-panel">
+          <h1>{sessionLabel}</h1>
+          <p className="muted">{session.progress ?? "processing"}</p>
+          <Link className="button-link" to="/">Back</Link>
+        </section>
       </div>
     );
   }
 
   if (session.status === "error") {
     return (
-      <div className="page">
-        <h1>Session Build Failed</h1>
-        <pre className="error-box">{session.error_message}</pre>
-        <Link to="/">Back</Link>
+      <div className="page page-create">
+        <section className="card status-panel">
+          <h1>{sessionLabel}</h1>
+          <pre className="error-box">{session.error_message}</pre>
+          <Link className="button-link" to="/">Back</Link>
+        </section>
       </div>
     );
   }
@@ -1124,10 +1106,12 @@ export function AnnotationPage() {
     <div className="page page-annotate">
       <header className="annot-header">
         <div className="annot-title-group">
-          <h1>{session.match_id}</h1>
+          <h1>{sessionLabel}</h1>
           <div className="annot-meta">
             <span className="meta-pill">{fps} fps</span>
             <span className="meta-pill">{events.length} rows</span>
+            <span className="meta-pill">{isUploadSession ? "Upload CSV" : "Existing Data"}</span>
+            {isUploadSession && <span className="meta-pill">{session.persist ? "Saved" : "Ephemeral"}</span>}
             <span className={`status-chip ${saveState}`} aria-live="polite">
               {saveState === "saving" && <span className="spinner" aria-hidden="true" />}
               Save {saveStateLabel}
@@ -1135,32 +1119,29 @@ export function AnnotationPage() {
           </div>
         </div>
         <div className="row annot-actions">
-          {session.sheet_url && (
-            <a className="button-link primary" href={session.sheet_url} target="_blank" rel="noreferrer">
-              Open Google Sheet
-            </a>
-          )}
-          <button
-            onClick={() => void handleSyncSheet()}
-            disabled={syncingSheet || resettingSheet}
-          >
-            {syncingSheet && <span className="spinner" aria-hidden="true" />}
-            {syncingSheet ? "Syncing..." : "Sync Sheet"}
-          </button>
+          <a className="button-link" href={originalCsvExportUrl}>
+            Original CSV
+          </a>
+          <a className="button-link primary" href={editedCsvExportUrl}>
+            Edited CSV
+          </a>
           <button
             className="danger"
-            onClick={() => void handleResetSheet()}
-            disabled={syncingSheet || resettingSheet}
+            onClick={() => void handleResetTimeline()}
+            disabled={resettingTimeline}
           >
-            {resettingSheet && <span className="spinner" aria-hidden="true" />}
-            {resettingSheet ? "Resetting..." : "Reset Timeline (Initial)"}
+            {resettingTimeline && <span className="spinner" aria-hidden="true" />}
+            {resettingTimeline ? "Resetting..." : "Reset Timeline"}
           </button>
           <Link className="button-link" to="/">New Session</Link>
         </div>
       </header>
 
       <main className="annot-layout">
-        <section className="video-panel card">
+        <section className="video-panel card workspace-card">
+          <div className="panel-heading">
+            <h2>Video</h2>
+          </div>
           {videoUrl ? (
             <>
               {videoCandidates.length > 1 && (
@@ -1234,59 +1215,59 @@ export function AnnotationPage() {
                 <button onClick={() => jump(-KEYBOARD_SEEK_SECONDS)}>-0.2s (Shift+←)</button>
                 <button onClick={() => jump(KEYBOARD_SEEK_SECONDS)}>+0.2s (Shift+→)</button>
               </div>
-              <p className="muted">Tip: ←/→ 는 1프레임 이동, Shift+←/→ 는 0.2초 이동</p>
             </>
           ) : (
-            <p>No video generated for this session.</p>
+            <p className="muted">Video unavailable.</p>
           )}
         </section>
 
-        <section className="editor-panel card">
-          <div className="section-header">
-            <h2>Event Timeline</h2>
-            <div className="section-actions">
-              <button onClick={addMissingRow}>Add Missing Row</button>
-              <button className="danger" disabled={!selectedRow} onClick={removeSelectedRow}>Remove Row</button>
-            </div>
-          </div>
-          <p className="muted">행을 클릭하면 해당 이벤트 프레임으로 비디오가 이동합니다.</p>
-          <div className="timeline-hud">
-            <div className="timeline-hud-item">
-              <div className="timeline-hud-label">Current frame</div>
-              <div className="timeline-hud-value">{currentFrame}</div>
-            </div>
-            <div className="timeline-hud-item">
-              <div className="timeline-hud-label">Selected frame</div>
-              <div className="timeline-hud-value">{selectedAnchorFrame ?? "-"}</div>
-            </div>
-            <div
-              className={[
-                "timeline-hud-item",
-                selectedFrameDelta !== null && Math.abs(selectedFrameDelta) <= 1 ? "hud-delta-match" : "",
-                selectedFrameDelta !== null && Math.abs(selectedFrameDelta) > 1 && Math.abs(selectedFrameDelta) <= 6
-                  ? "hud-delta-near"
-                  : "",
-              ]
-                .filter(Boolean)
-                .join(" ")}
-            >
-              <div className="timeline-hud-label">Δ (selected - now)</div>
-              <div className="timeline-hud-value">
-                {selectedFrameDelta === null ? "-" : `${selectedFrameDelta > 0 ? "+" : ""}${selectedFrameDelta}`}
+        <div className="editor-stack">
+          <section className="timeline-panel card workspace-card">
+            <div className="section-header">
+              <h2>Timeline</h2>
+              <div className="section-actions">
+                <button onClick={addMissingRow}>Add Missing Row</button>
+                <button className="danger" disabled={!selectedRow} onClick={removeSelectedRow}>Remove Row</button>
               </div>
             </div>
-          </div>
-          <EventTable
-            rows={events}
-            selectedIndex={selectedIndex}
-            currentFrame={currentFrame}
-            onSelect={handleSelectEvent}
-          />
+            <div className="timeline-hud">
+              <div className="timeline-hud-item">
+                <div className="timeline-hud-label">Current frame</div>
+                <div className="timeline-hud-value">{currentFrame}</div>
+              </div>
+              <div className="timeline-hud-item">
+                <div className="timeline-hud-label">Selected frame</div>
+                <div className="timeline-hud-value">{selectedAnchorFrame ?? "-"}</div>
+              </div>
+              <div
+                className={[
+                  "timeline-hud-item",
+                  selectedFrameDelta !== null && Math.abs(selectedFrameDelta) <= 1 ? "hud-delta-match" : "",
+                  selectedFrameDelta !== null && Math.abs(selectedFrameDelta) > 1 && Math.abs(selectedFrameDelta) <= 6
+                    ? "hud-delta-near"
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+              >
+                <div className="timeline-hud-label">Δ (selected - now)</div>
+                <div className="timeline-hud-value">
+                  {selectedFrameDelta === null ? "-" : `${selectedFrameDelta > 0 ? "+" : ""}${selectedFrameDelta}`}
+                </div>
+              </div>
+            </div>
+            <EventTable
+              rows={events}
+              selectedIndex={selectedIndex}
+              currentFrame={currentFrame}
+              onSelect={handleSelectEvent}
+            />
+          </section>
 
-          {selectedRow ? (
-            <>
-              <h2 className="editor-title">Edit Event #{selectedIndex + 1}</h2>
-              <div className="row">
+          <section className="inspector-panel card workspace-card">
+            <div className="section-header">
+              <h2>{selectedRow ? `Inspector #${selectedIndex + 1}` : "Inspector"}</h2>
+              {selectedRow && (
                 <button
                   className="primary"
                   onClick={confirmRowChanges}
@@ -1295,193 +1276,205 @@ export function AnnotationPage() {
                 >
                   Confirm Row Changes
                 </button>
-                {hasPendingRowChanges && <span className="muted">미확정 수정사항 있음</span>}
-                {isErrorTypeRequired && <span className="error-text">error_type을 선택해야 Confirm 가능합니다.</span>}
-                {!canConfirmRowChanges && (
-                  <span className="muted">Confirm 비활성: {confirmBlockedReason}</span>
-                )}
-              </div>
-              <div className="form-grid">
+              )}
+            </div>
+
+            {selectedRow ? (
+              <>
+                <div className="inspector-status">
+                  {hasPendingRowChanges && <span className="muted">미확정 수정사항 있음</span>}
+                  {isErrorTypeRequired && <span className="error-text">error_type을 선택해야 Confirm 가능합니다.</span>}
+                  {!canConfirmRowChanges && (
+                    <span className="muted">Confirm 비활성: {confirmBlockedReason}</span>
+                  )}
+                </div>
+
+                <div className="form-grid">
+                  <label>
+                    period_id
+                    <input
+                      type="number"
+                      value={draftRow?.period_id ?? selectedRow.period_id}
+                      onChange={(e) => updateDraftRow({ period_id: Number(e.target.value) || 1 })}
+                    />
+                  </label>
+
+                  <label>
+                    spadl_type
+                    <select
+                      value={draftRow?.spadl_type ?? selectedRow.spadl_type}
+                      onChange={(e) => updateDraftRow({ spadl_type: e.target.value })}
+                    >
+                      {spadlTypes.length === 0 && (
+                        <option value={selectedRow.spadl_type}>{selectedRow.spadl_type}</option>
+                      )}
+                      {spadlTypes.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                      {!spadlTypes.includes(selectedRow.spadl_type) && selectedRow.spadl_type && (
+                        <option value={selectedRow.spadl_type}>{selectedRow.spadl_type}</option>
+                      )}
+                    </select>
+                  </label>
+
+                  <label>
+                    player_id
+                    <select
+                      className={!isDraftPlayerIdValid ? "input-error" : ""}
+                      value={draftPlayerId}
+                      onChange={(e) => updateDraftRow({ player_id: e.target.value })}
+                    >
+                      {draftPlayerId && !knownEntityIdSet.has(draftPlayerId) && (
+                        <option value={draftPlayerId}>{draftPlayerId}</option>
+                      )}
+                      {knownEntityIds.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                    {!isDraftPlayerIdValid && (
+                      <p className="error-text id-format-help">player_id는 목록에서 선택하세요.</p>
+                    )}
+                  </label>
+
+                  <label>
+                    synced_frame_id
+                    <div className="inline-field">
+                      <input
+                        type="number"
+                        value={draftRow?.synced_frame_id ?? selectedRow.synced_frame_id ?? ""}
+                        onChange={(e) => updateFrameAndTimestamp("synced", e.target.value)}
+                      />
+                      <button type="button" onClick={() => applyCurrentTo("synced")}>Use Current</button>
+                    </div>
+                    <p className="muted id-format-help">synced_ts 자동: {draftRow?.synced_ts ?? selectedRow.synced_ts ?? "-"}</p>
+                  </label>
+
+                  <label>
+                    receiver_id
+                    <select
+                      className={!isDraftReceiverIdValid ? "input-error" : ""}
+                      value={draftReceiverId}
+                      onChange={(e) => updateDraftRow({ receiver_id: e.target.value })}
+                    >
+                      <option value="">(none)</option>
+                      {draftReceiverId && !knownEntityIdSet.has(draftReceiverId) && (
+                        <option value={draftReceiverId}>{draftReceiverId}</option>
+                      )}
+                      {knownEntityIds.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                    {!isDraftReceiverIdValid && (
+                      <p className="error-text id-format-help">receiver_id는 목록에서 선택하거나 비워두세요.</p>
+                    )}
+                  </label>
+
+                  <label>
+                    receive_frame_id
+                    <div className="inline-field">
+                      <input
+                        type="number"
+                        value={draftRow?.receive_frame_id ?? selectedRow.receive_frame_id ?? ""}
+                        onChange={(e) => updateFrameAndTimestamp("receive", e.target.value)}
+                      />
+                      <button type="button" onClick={() => applyCurrentTo("receive")}>Use Current</button>
+                    </div>
+                    <p className="muted id-format-help">receive_ts 자동: {draftRow?.receive_ts ?? selectedRow.receive_ts ?? "-"}</p>
+                  </label>
+
+                  <label>
+                    outcome
+                    <select
+                      value={(draftRow?.outcome ?? selectedRow.outcome) ? "true" : "false"}
+                      onChange={(e) => updateDraftRow({ outcome: e.target.value === "true" })}
+                    >
+                      <option value="true">TRUE</option>
+                      <option value="false">FALSE</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    error_type
+                    <select
+                      className={isErrorTypeRequired ? "input-error" : ""}
+                      aria-invalid={isErrorTypeRequired}
+                      value={draftRow?.error_type ?? selectedRow.error_type ?? ""}
+                      onChange={(e) => updateDraftRow({ error_type: (e.target.value || null) as ErrorType | null })}
+                    >
+                      {ERROR_TYPES.map((value) => (
+                        <option key={value || "empty"} value={value}>
+                          {value || "(none)"}
+                        </option>
+                      ))}
+                    </select>
+                    {isErrorTypeRequired && (
+                      <p className="error-text id-format-help">행 수정 시 error_type은 필수입니다.</p>
+                    )}
+                    {!isErrorTypeRequired && hasPendingRowChanges && (
+                      <p className="muted id-format-help">변경 컬럼 기준으로 자동 선택됩니다. (동시 변경 시 왼쪽 컬럼 우선)</p>
+                    )}
+                  </label>
+                </div>
+
                 <label>
-                  period_id
-                  <input
-                    type="number"
-                    value={draftRow?.period_id ?? selectedRow.period_id}
-                    onChange={(e) => updateDraftRow({ period_id: Number(e.target.value) || 1 })}
+                  note
+                  <textarea
+                    value={draftRow?.note ?? selectedRow.note}
+                    onChange={(e) => updateDraftRow({ note: e.target.value })}
+                    rows={3}
                   />
                 </label>
 
-                <label>
-                  spadl_type
-                  <select
-                    value={draftRow?.spadl_type ?? selectedRow.spadl_type}
-                    onChange={(e) => updateDraftRow({ spadl_type: e.target.value })}
-                  >
-                    {spadlTypes.length === 0 && (
-                      <option value={selectedRow.spadl_type}>{selectedRow.spadl_type}</option>
-                    )}
-                    {spadlTypes.map((value) => (
-                      <option key={value} value={value}>
-                        {value}
-                      </option>
-                    ))}
-                    {!spadlTypes.includes(selectedRow.spadl_type) && selectedRow.spadl_type && (
-                      <option value={selectedRow.spadl_type}>{selectedRow.spadl_type}</option>
-                    )}
-                  </select>
-                </label>
+                <p className="muted inspector-footnote">
+                  synced_frame_id: {draftRow?.synced_frame_id ?? selectedRow.synced_frame_id ?? "-"} | receive_frame_id: {draftRow?.receive_frame_id ?? selectedRow.receive_frame_id ?? "-"}
+                </p>
+              </>
+            ) : (
+              <p className="muted">No event row selected.</p>
+            )}
+          </section>
 
-                <label>
-                  player_id
-                  <select
-                    className={!isDraftPlayerIdValid ? "input-error" : ""}
-                    value={draftPlayerId}
-                    onChange={(e) => updateDraftRow({ player_id: e.target.value })}
-                  >
-                    {draftPlayerId && !knownEntityIdSet.has(draftPlayerId) && (
-                      <option value={draftPlayerId}>{draftPlayerId}</option>
-                    )}
-                    {knownEntityIds.map((value) => (
-                      <option key={value} value={value}>
-                        {value}
-                      </option>
-                    ))}
-                  </select>
-                  {!isDraftPlayerIdValid && (
-                    <p className="error-text id-format-help">player_id는 목록에서 선택하세요.</p>
-                  )}
-                </label>
+          {(warnings.length > 0 || saveMessage) && (
+            <section className="review-panel card workspace-card">
+              {warnings.length > 0 && (
+                <>
+                  <h3>Warnings</h3>
+                  <ul>
+                    {warningItems.map((item) => {
+                      if (item.frameId !== null) {
+                        const frameId = item.frameId;
+                        return (
+                          <li key={item.key} className="warning-item">
+                            <button
+                              type="button"
+                              className="warning-frame-link"
+                              onClick={() => jumpToWarningFrame(frameId)}
+                            >
+                              frame {frameId}
+                            </button>
+                            <span>{item.body}</span>
+                          </li>
+                        );
+                      }
+                      return <li key={item.key} className="warning-item">{item.text}</li>;
+                    })}
+                  </ul>
+                </>
+              )}
 
-                <label>
-                  synced_frame_id
-                  <div className="inline-field">
-                    <input
-                      type="number"
-                      value={draftRow?.synced_frame_id ?? selectedRow.synced_frame_id ?? ""}
-                      onChange={(e) => updateFrameAndTimestamp("synced", e.target.value)}
-                    />
-                    <button type="button" onClick={() => applyCurrentTo("synced")}>Use Current</button>
-                  </div>
-                  <p className="muted id-format-help">synced_ts 자동: {draftRow?.synced_ts ?? selectedRow.synced_ts ?? "-"}</p>
-                </label>
-
-                <label>
-                  receiver_id
-                  <select
-                    className={!isDraftReceiverIdValid ? "input-error" : ""}
-                    value={draftReceiverId}
-                    onChange={(e) => updateDraftRow({ receiver_id: e.target.value })}
-                  >
-                    <option value="">(none)</option>
-                    {draftReceiverId && !knownEntityIdSet.has(draftReceiverId) && (
-                      <option value={draftReceiverId}>{draftReceiverId}</option>
-                    )}
-                    {knownEntityIds.map((value) => (
-                      <option key={value} value={value}>
-                        {value}
-                      </option>
-                    ))}
-                  </select>
-                  {!isDraftReceiverIdValid && (
-                    <p className="error-text id-format-help">receiver_id는 목록에서 선택하거나 비워두세요.</p>
-                  )}
-                </label>
-
-                <label>
-                  receive_frame_id
-                  <div className="inline-field">
-                    <input
-                      type="number"
-                      value={draftRow?.receive_frame_id ?? selectedRow.receive_frame_id ?? ""}
-                      onChange={(e) => updateFrameAndTimestamp("receive", e.target.value)}
-                    />
-                    <button type="button" onClick={() => applyCurrentTo("receive")}>Use Current</button>
-                  </div>
-                  <p className="muted id-format-help">receive_ts 자동: {draftRow?.receive_ts ?? selectedRow.receive_ts ?? "-"}</p>
-                </label>
-
-                <label>
-                  outcome
-                  <select
-                    value={(draftRow?.outcome ?? selectedRow.outcome) ? "true" : "false"}
-                    onChange={(e) => updateDraftRow({ outcome: e.target.value === "true" })}
-                  >
-                    <option value="true">TRUE</option>
-                    <option value="false">FALSE</option>
-                  </select>
-                </label>
-
-                <label>
-                  error_type
-                  <select
-                    className={isErrorTypeRequired ? "input-error" : ""}
-                    aria-invalid={isErrorTypeRequired}
-                    value={draftRow?.error_type ?? selectedRow.error_type ?? ""}
-                    onChange={(e) => updateDraftRow({ error_type: (e.target.value || null) as ErrorType | null })}
-                  >
-                    {ERROR_TYPES.map((value) => (
-                      <option key={value || "empty"} value={value}>
-                        {value || "(none)"}
-                      </option>
-                    ))}
-                  </select>
-                  {isErrorTypeRequired && (
-                    <p className="error-text id-format-help">행 수정 시 error_type은 필수입니다.</p>
-                  )}
-                  {!isErrorTypeRequired && hasPendingRowChanges && (
-                    <p className="muted id-format-help">변경 컬럼 기준으로 자동 선택됩니다. (동시 변경 시 왼쪽 컬럼 우선)</p>
-                  )}
-                </label>
-              </div>
-
-              <label>
-                note
-                <textarea
-                  value={draftRow?.note ?? selectedRow.note}
-                  onChange={(e) => updateDraftRow({ note: e.target.value })}
-                  rows={3}
-                />
-              </label>
-
-              <p className="muted">
-                synced_frame_id: {draftRow?.synced_frame_id ?? selectedRow.synced_frame_id ?? "-"} | receive_frame_id: {draftRow?.receive_frame_id ?? selectedRow.receive_frame_id ?? "-"}
-              </p>
-            </>
-          ) : (
-            <p>No event row selected.</p>
+              {saveMessage && (
+                <p className={`save-feedback ${saveState === "error" ? "error-text" : "muted"}`}>{saveMessage}</p>
+              )}
+            </section>
           )}
-        </section>
-      </main>
-
-      {warnings.length > 0 && (
-        <div className="card">
-          <h3>Validation warnings</h3>
-          <ul>
-            {warningItems.map((item) => {
-              if (item.frameId !== null) {
-                const frameId = item.frameId;
-                return (
-                  <li key={item.key} className="warning-item">
-                    <button
-                      type="button"
-                      className="warning-frame-link"
-                      onClick={() => jumpToWarningFrame(frameId)}
-                    >
-                      frame {frameId}
-                    </button>
-                    <span>{item.body}</span>
-                  </li>
-                );
-              }
-              return <li key={item.key} className="warning-item">{item.text}</li>;
-            })}
-          </ul>
         </div>
-      )}
-
-      {saveMessage && (
-        <p className={`save-feedback ${saveState === "error" ? "error-text" : "muted"}`}>{saveMessage}</p>
-      )}
+      </main>
     </div>
   );
 }

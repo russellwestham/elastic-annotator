@@ -8,8 +8,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from backend.app.services.sheets import GoogleSheetsService
-
 class SessionStore:
     def __init__(self, sessions_root: Path) -> None:
         self.sessions_root = sessions_root
@@ -26,13 +24,27 @@ class SessionStore:
     def initial_events_path(self, session_id: str) -> Path:
         return self.session_dir(session_id) / "initial_events.json"
 
-    def create_session(self, annotator_name: str, match_id: str, dataset_root: str, generate_video: bool) -> dict[str, Any]:
+    def create_session(
+        self,
+        annotator_name: str,
+        match_id: str,
+        dataset_root: str,
+        generate_video: bool,
+        *,
+        session_mode: str = "legacy_elastic",
+        persist: bool = True,
+        session_name: str | None = None,
+        validation_warnings: list[str] | None = None,
+    ) -> dict[str, Any]:
         session_id = uuid4().hex[:12]
         created_at = self._now_iso()
         payload = {
             "session_id": session_id,
             "annotator_name": annotator_name,
             "match_id": match_id,
+            "session_mode": session_mode,
+            "persist": bool(persist),
+            "session_name": session_name,
             "dataset_root": dataset_root,
             "generate_video": bool(generate_video),
             "status": "processing",
@@ -42,11 +54,7 @@ class SessionStore:
             "fps": None,
             "video_url": None,
             "video_urls": [],
-            "sheet_url": None,
-            "sheet_tab_name": None,
-            "sheet_gid": None,
-            "sheet_tab_url": None,
-            "sheet_sync_error": None,
+            "validation_warnings": validation_warnings or [],
             "created_at": created_at,
             "updated_at": created_at,
         }
@@ -132,12 +140,8 @@ class SessionStore:
                 continue
 
             match_id = str(metadata.get("match_id") or "").strip()
-            sheet_tab_name = str(
-                metadata.get("sheet_tab_name")
-                or GoogleSheetsService.normalize_annotator_name(metadata.get("annotator_name"))
-                or ""
-            ).strip().lower()
-            key = (match_id, sheet_tab_name)
+            annotator_name = str(metadata.get("annotator_name") or "").strip().lower()
+            key = (match_id, annotator_name)
 
             prev = latest_alive_by_key.get(key)
             if prev is None:
@@ -176,6 +180,8 @@ class SessionStore:
         limit: int = 20,
         status: str | None = None,
         match_id: str | None = None,
+        session_mode: str | None = None,
+        include_ephemeral: bool = False,
     ) -> list[dict[str, Any]]:
         sessions: list[dict[str, Any]] = []
         for meta_path in self._iter_metadata_paths():
@@ -188,12 +194,22 @@ class SessionStore:
                 continue
             if match_id is not None and metadata.get("match_id") != match_id:
                 continue
+            if session_mode is not None and metadata.get("session_mode", "legacy_elastic") != session_mode:
+                continue
+            if not include_ephemeral and metadata.get("persist", True) is False:
+                continue
             sessions.append(metadata)
 
         sessions.sort(key=lambda item: item.get("updated_at") or item.get("created_at") or "", reverse=True)
         return sessions[: max(1, limit)]
 
-    def find_processing_session(self, *, match_id: str | None = None, dataset_root: str | None = None) -> dict[str, Any] | None:
+    def find_processing_session(
+        self,
+        *,
+        match_id: str | None = None,
+        dataset_root: str | None = None,
+        session_mode: str | None = None,
+    ) -> dict[str, Any] | None:
         candidates: list[dict[str, Any]] = []
         for meta_path in self._iter_metadata_paths():
             try:
@@ -206,6 +222,8 @@ class SessionStore:
             if match_id is not None and metadata.get("match_id") != match_id:
                 continue
             if dataset_root is not None and metadata.get("dataset_root") != dataset_root:
+                continue
+            if session_mode is not None and metadata.get("session_mode", "legacy_elastic") != session_mode:
                 continue
             candidates.append(metadata)
 
@@ -238,9 +256,30 @@ class SessionStore:
         metadata_path = self.session_dir(session_id) / "metadata.json"
         events_path = self.session_dir(session_id) / "events.json"
         initial_events_path = self.initial_events_path(session_id)
+        allowed_keys = {
+            "session_id",
+            "annotator_name",
+            "match_id",
+            "session_mode",
+            "persist",
+            "session_name",
+            "dataset_root",
+            "generate_video",
+            "status",
+            "progress",
+            "error_message",
+            "event_count",
+            "fps",
+            "video_url",
+            "video_urls",
+            "validation_warnings",
+            "created_at",
+            "updated_at",
+        }
 
         with self._lock:
             metadata = self._read_json(metadata_path)
+            metadata = {key: value for key, value in metadata.items() if key in allowed_keys}
             metadata.update(
                 {
                     "status": "processing",
@@ -250,11 +289,6 @@ class SessionStore:
                     "fps": None,
                     "video_url": None,
                     "video_urls": [],
-                    "sheet_url": None,
-                    "sheet_tab_name": None,
-                    "sheet_gid": None,
-                    "sheet_tab_url": None,
-                    "sheet_sync_error": None,
                     "updated_at": self._now_iso(),
                 }
             )

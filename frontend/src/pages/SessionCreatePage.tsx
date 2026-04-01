@@ -1,18 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState, type DragEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
-  clearSheetMapping,
+  buildSessionOpenUrl,
   createSession,
+  createUploadSession,
   fetchDefaultDatasetRoot,
   fetchMatches,
-  fetchSessions,
   fetchSession,
-  fetchSheetMapping,
-  upsertSheetMapping,
-  uploadDataset,
+  fetchSessions,
 } from "../api";
 import type { MatchSummary, SessionStatus } from "../types";
+
+type CreateMode = "existing" | "upload";
 
 function formatDateTime(iso: string): string {
   const dt = new Date(iso);
@@ -22,42 +22,43 @@ function formatDateTime(iso: string): string {
   return dt.toLocaleString("ko-KR", { hour12: false });
 }
 
+function getTrackLabel(session: SessionStatus): string {
+  return session.session_mode === "upload_csv" ? "My Uploaded Data" : "Public Dataset";
+}
+
+function getPersistLabel(session: SessionStatus): string {
+  if (session.session_mode !== "upload_csv") {
+    return "-";
+  }
+  return session.persist ? "Saved" : "Ephemeral";
+}
+
 export function SessionCreatePage() {
   const navigate = useNavigate();
 
-  const [annotatorName, setAnnotatorName] = useState("");
+  const [createMode, setCreateMode] = useState<CreateMode>("existing");
+
+  const annotatorName = "kunhee";
   const [datasetRoot, setDatasetRoot] = useState("");
-  const [generateVideo, setGenerateVideo] = useState(true);
+  const [generateVideo] = useState(false);
   const [matches, setMatches] = useState<MatchSummary[]>([]);
   const [matchId, setMatchId] = useState("");
 
-  const [loadingMatches, setLoadingMatches] = useState(false);
+  const [uploadVideoFile, setUploadVideoFile] = useState<File | null>(null);
+  const [uploadCsvFile, setUploadCsvFile] = useState<File | null>(null);
+  const [persistUpload, setPersistUpload] = useState(true);
+  const [dragTarget, setDragTarget] = useState<"video" | "csv" | null>(null);
+
   const [creating, setCreating] = useState(false);
   const [status, setStatus] = useState<SessionStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [sheetRef, setSheetRef] = useState("");
-  const [sheetLoading, setSheetLoading] = useState(false);
-  const [sheetSaving, setSheetSaving] = useState(false);
-  const [sheetMessage, setSheetMessage] = useState<string | null>(null);
-  const [mappedSheetUrl, setMappedSheetUrl] = useState<string | null>(null);
   const [defaultDatasetRoot, setDefaultDatasetRoot] = useState<string>("");
   const [defaultDatasetExists, setDefaultDatasetExists] = useState<boolean>(false);
   const [recentSessions, setRecentSessions] = useState<SessionStatus[]>([]);
-  const [matchSheetUrls, setMatchSheetUrls] = useState<Record<string, string>>({});
   const [loadingRecentSessions, setLoadingRecentSessions] = useState(false);
   const [openingLatest, setOpeningLatest] = useState(false);
 
-  const selectedMatchLabel = useMemo(() => {
-    const selected = matches.find((m) => m.match_id === matchId);
-    if (!selected) return "";
-    if (selected.home_team && selected.away_team) {
-      return `${selected.match_id} (${selected.home_team} vs ${selected.away_team})`;
-    }
-    return selected.match_id;
-  }, [matches, matchId]);
-
   const loadMatches = async (root?: string): Promise<MatchSummary[]> => {
-    setLoadingMatches(true);
     setError(null);
     try {
       const found = await fetchMatches(root);
@@ -69,8 +70,6 @@ export function SessionCreatePage() {
     } catch (err) {
       setError((err as Error).message);
       return [];
-    } finally {
-      setLoadingMatches(false);
     }
   };
 
@@ -79,25 +78,6 @@ export function SessionCreatePage() {
     try {
       const sessions = await fetchSessions({ limit: 30 });
       setRecentSessions(sessions);
-
-      const matchIds = [...new Set(sessions.map((session) => session.match_id))];
-      const mapped = await Promise.all(
-        matchIds.map(async (id) => {
-          try {
-            const mapping = await fetchSheetMapping(id);
-            return [id, mapping.sheet_url?.trim() ?? ""] as const;
-          } catch {
-            return [id, ""] as const;
-          }
-        }),
-      );
-      const sheetByMatch: Record<string, string> = {};
-      for (const [id, sheetUrl] of mapped) {
-        if (sheetUrl) {
-          sheetByMatch[id] = sheetUrl;
-        }
-      }
-      setMatchSheetUrls(sheetByMatch);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -116,7 +96,6 @@ export function SessionCreatePage() {
       void loadRecentSessions();
     }, 10000);
     return () => window.clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -148,7 +127,12 @@ export function SessionCreatePage() {
         setStatus(next);
         if (next.status === "ready") {
           window.clearInterval(timer);
-          navigate(`/annotate/m/${encodeURIComponent(next.match_id)}`);
+          const openUrl = buildSessionOpenUrl(next);
+          if (openUrl.startsWith("http://") || openUrl.startsWith("https://")) {
+            window.location.assign(openUrl);
+          } else {
+            navigate(openUrl);
+          }
         }
         if (next.status === "error") {
           window.clearInterval(timer);
@@ -161,54 +145,7 @@ export function SessionCreatePage() {
     return () => window.clearInterval(timer);
   }, [navigate, status]);
 
-  useEffect(() => {
-    if (!matchId) {
-      setSheetRef("");
-      setMappedSheetUrl(null);
-      setSheetMessage(null);
-      return;
-    }
-
-    let mounted = true;
-    setSheetLoading(true);
-    setSheetMessage(null);
-    void fetchSheetMapping(matchId)
-      .then((mapping) => {
-        if (!mounted) return;
-        setMappedSheetUrl(mapping.sheet_url ?? null);
-        setSheetRef(mapping.sheet_url ?? mapping.sheet_id ?? "");
-      })
-      .catch((err) => {
-        if (!mounted) return;
-        setError((err as Error).message);
-      })
-      .finally(() => {
-        if (!mounted) return;
-        setSheetLoading(false);
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, [matchId]);
-
-  const handleDatasetUpload = async (file: File) => {
-    setError(null);
-    try {
-      const result = await uploadDataset(file);
-      setDatasetRoot(result.dataset_root);
-      const found = await loadMatches(result.dataset_root);
-      if (found.length === 0) {
-        setError(
-          "ZIP 업로드는 완료됐지만 경기 목록을 찾지 못했습니다. ZIP 내부에 metadata/event/tracking 폴더가 있는지 확인해 주세요.",
-        );
-      }
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  };
-
-  const handleCreate = async () => {
+  const handleCreateExisting = async () => {
     if (!matchId) {
       setError("match_id is required");
       return;
@@ -218,14 +155,6 @@ export function SessionCreatePage() {
     setError(null);
 
     try {
-      const normalizedSheetRef = sheetRef.trim();
-      if (normalizedSheetRef) {
-        const mapping = await upsertSheetMapping(matchId, normalizedSheetRef);
-        setMappedSheetUrl(mapping.sheet_url ?? null);
-        setSheetRef(mapping.sheet_url ?? mapping.sheet_id ?? normalizedSheetRef);
-        setSheetMessage("Sheet mapping saved");
-      }
-
       const normalizedAnnotator = annotatorName.trim() || "kunhee";
       const created = await createSession({
         annotator_name: normalizedAnnotator,
@@ -240,6 +169,77 @@ export function SessionCreatePage() {
     } finally {
       setCreating(false);
     }
+  };
+
+  const handleCreateUpload = async () => {
+    if (!uploadVideoFile || !uploadCsvFile) {
+      setError("video.mp4와 events_seed.csv를 모두 선택하세요.");
+      return;
+    }
+
+    setCreating(true);
+    setError(null);
+    try {
+      const created = await createUploadSession({
+        videoFile: uploadVideoFile,
+        csvFile: uploadCsvFile,
+        persist: persistUpload,
+      });
+      setStatus(created);
+      await loadRecentSessions();
+      navigate(buildSessionOpenUrl(created));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const applyUploadFile = (target: "video" | "csv", file: File | null) => {
+    if (!file) {
+      return;
+    }
+
+    setError(null);
+    const filename = file.name.toLowerCase();
+    if (target === "video") {
+      const validVideo = [".mp4", ".mov", ".m4v", ".webm"].some((ext) => filename.endsWith(ext));
+      if (!validVideo) {
+        setError("Video file must be mp4, mov, m4v, or webm.");
+        return;
+      }
+      setUploadVideoFile(file);
+      return;
+    }
+
+    if (!filename.endsWith(".csv")) {
+      setError("CSV file must use the .csv extension.");
+      return;
+    }
+    setUploadCsvFile(file);
+  };
+
+  const handleUploadDragOver = (target: "video" | "csv") => (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setDragTarget(target);
+  };
+
+  const handleUploadDragLeave = (target: "video" | "csv") => (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+      return;
+    }
+    if (dragTarget === target) {
+      setDragTarget(null);
+    }
+  };
+
+  const handleUploadDrop = (target: "video" | "csv") => (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    setDragTarget(null);
+    applyUploadFile(target, event.dataTransfer.files?.[0] ?? null);
   };
 
   const handleOpenLatest = async () => {
@@ -258,256 +258,225 @@ export function SessionCreatePage() {
     }
   };
 
-  const handleSaveSheetMapping = async () => {
-    if (!matchId) {
-      setError("match_id is required");
-      return;
-    }
-    if (!sheetRef.trim()) {
-      setError("Google Sheet URL/ID is required");
-      return;
-    }
-
-    setSheetSaving(true);
-    setError(null);
-    setSheetMessage(null);
-    try {
-      const mapping = await upsertSheetMapping(matchId, sheetRef.trim());
-      setMappedSheetUrl(mapping.sheet_url ?? null);
-      setSheetRef(mapping.sheet_url ?? mapping.sheet_id ?? sheetRef.trim());
-      setSheetMessage("Sheet mapping saved");
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSheetSaving(false);
-    }
-  };
-
-  const handleClearSheetMapping = async () => {
-    if (!matchId) {
-      setError("match_id is required");
-      return;
-    }
-    setSheetSaving(true);
-    setError(null);
-    setSheetMessage(null);
-    try {
-      await clearSheetMapping(matchId);
-      setMappedSheetUrl(null);
-      setSheetRef("");
-      setSheetMessage("Sheet mapping cleared");
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSheetSaving(false);
-    }
-  };
-
   return (
     <div className="page page-create">
-      <h1>ELASTIC Annotation - Session Setup</h1>
+      <section className="card create-toolbar">
+        <div className="mode-tabs" role="tablist" aria-label="Session intake mode">
+          <button
+            type="button"
+            id="session-mode-tab-existing"
+            role="tab"
+            aria-selected={createMode === "existing"}
+            aria-controls="session-mode-panel-existing"
+            tabIndex={createMode === "existing" ? 0 : -1}
+            className={`mode-tab ${createMode === "existing" ? "active" : ""}`}
+            onClick={() => setCreateMode("existing")}
+          >
+            <span className="mode-tab-title">Review Public Dataset</span>
+          </button>
+          <button
+            type="button"
+            id="session-mode-tab-upload"
+            role="tab"
+            aria-selected={createMode === "upload"}
+            aria-controls="session-mode-panel-upload"
+            tabIndex={createMode === "upload" ? 0 : -1}
+            className={`mode-tab ${createMode === "upload" ? "active" : ""}`}
+            onClick={() => setCreateMode("upload")}
+          >
+            <span className="mode-tab-title">Upload & Review My Data</span>
+          </button>
+        </div>
 
-      <div className="card">
-        <label>
-          Annotator Name
-          <input
-            value={annotatorName}
-            onChange={(e) => setAnnotatorName(e.target.value)}
-            placeholder="예: leekunhee_dyve"
-          />
-        </label>
+        {createMode === "existing" ? (
+          <div
+            id="session-mode-panel-existing"
+            role="tabpanel"
+            aria-labelledby="session-mode-tab-existing"
+            className="create-panel"
+          >
+            <div className="create-fields two-up">
+              <label>
+                Match
+                <select value={matchId} onChange={(e) => setMatchId(e.target.value)}>
+                  {matches.length === 0 && <option value="">No matches found</option>}
+                  {matches.map((m) => (
+                    <option key={m.match_id} value={m.match_id}>
+                      {m.match_id} {m.home_team && m.away_team ? `(${m.home_team} vs ${m.away_team})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-        <label>
-          Dataset Root (optional)
-          <input
-            value={datasetRoot}
-            onChange={(e) => setDatasetRoot(e.target.value)}
-            placeholder="/Users/.../data/sportec"
-          />
-        </label>
-        {defaultDatasetRoot && (
-          <p className="muted">
-            기본 Sportec 데이터셋: {defaultDatasetRoot} {defaultDatasetExists ? "(available)" : "(not found)"}
-          </p>
+              <label>
+                Dataset Root
+                <input
+                  value={datasetRoot}
+                  onChange={(e) => setDatasetRoot(e.target.value)}
+                  placeholder="/Users/.../data/sportec"
+                />
+              </label>
+            </div>
+
+            <div className="create-actions">
+              <button type="button" className="primary" onClick={handleOpenLatest} disabled={openingLatest || !matchId}>
+                {openingLatest ? "Opening..." : "Open Latest"}
+              </button>
+              <button type="button" onClick={handleCreateExisting} disabled={creating}>
+                {creating ? "Creating..." : "Create Session"}
+              </button>
+            </div>
+
+            {defaultDatasetRoot && datasetRoot.trim() === defaultDatasetRoot && (
+              <p className="muted compact-note">
+                {defaultDatasetExists ? "Default dataset ready" : "Default dataset not found"}
+              </p>
+            )}
+          </div>
+        ) : (
+          <div
+            id="session-mode-panel-upload"
+            role="tabpanel"
+            aria-labelledby="session-mode-tab-upload"
+            className="create-panel"
+          >
+            <div className="create-fields upload-grid">
+              <label
+                className={[
+                  "upload-card",
+                  "upload-card-video",
+                  dragTarget === "video" ? "drag-active" : "",
+                  uploadVideoFile ? "has-file" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                onDragEnter={handleUploadDragOver("video")}
+                onDragOver={handleUploadDragOver("video")}
+                onDragLeave={handleUploadDragLeave("video")}
+                onDrop={handleUploadDrop("video")}
+              >
+                <span className="upload-card-header">
+                  <span className="upload-card-label">Video</span>
+                  {uploadVideoFile ? <span className="upload-card-state">Selected</span> : null}
+                </span>
+                <span className="upload-card-value">
+                  {uploadVideoFile?.name ?? "Drop or click"}
+                </span>
+                <span className="upload-card-meta">
+                  {uploadVideoFile ? "Replace file" : "MP4, MOV, M4V, WEBM"}
+                </span>
+                <input
+                  type="file"
+                  accept=".mp4,.mov,.m4v,.webm,video/*"
+                  onChange={(e) => applyUploadFile("video", e.target.files?.[0] ?? null)}
+                />
+              </label>
+
+              <label
+                className={[
+                  "upload-card",
+                  "upload-card-csv",
+                  dragTarget === "csv" ? "drag-active" : "",
+                  uploadCsvFile ? "has-file" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                onDragEnter={handleUploadDragOver("csv")}
+                onDragOver={handleUploadDragOver("csv")}
+                onDragLeave={handleUploadDragLeave("csv")}
+                onDrop={handleUploadDrop("csv")}
+              >
+                <span className="upload-card-header">
+                  <span className="upload-card-label">CSV</span>
+                  {uploadCsvFile ? <span className="upload-card-state">Selected</span> : null}
+                </span>
+                <span className="upload-card-value">
+                  {uploadCsvFile?.name ?? "Drop or click"}
+                </span>
+                <span className="upload-card-meta">
+                  {uploadCsvFile ? "Replace file" : "events_seed.csv"}
+                </span>
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={(e) => applyUploadFile("csv", e.target.files?.[0] ?? null)}
+                />
+              </label>
+            </div>
+
+            <div className="create-actions upload-actions">
+              <button type="button" className="primary" onClick={handleCreateUpload} disabled={creating}>
+                {creating ? "Uploading..." : "Upload and Open"}
+              </button>
+              <label className="check-row compact-check">
+                <input
+                  type="checkbox"
+                  checked={persistUpload}
+                  onChange={(e) => setPersistUpload(e.target.checked)}
+                />
+                Save this session
+              </label>
+            </div>
+          </div>
         )}
+      </section>
 
-        <div className="row">
-          <button type="button" onClick={() => void loadMatches(datasetRoot || undefined)} disabled={loadingMatches}>
-            {loadingMatches ? "Loading matches..." : "Reload Matches"}
-          </button>
-
-          <label className="file-upload">
-            Upload Dataset ZIP
-            <input
-              type="file"
-              accept=".zip"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) {
-                  void handleDatasetUpload(file);
-                }
-              }}
-            />
-          </label>
-        </div>
-
-        <label>
-          Match
-          <select value={matchId} onChange={(e) => setMatchId(e.target.value)}>
-            {matches.length === 0 && <option value="">No matches found</option>}
-            {matches.map((m) => (
-              <option key={m.match_id} value={m.match_id}>
-                {m.match_id} {m.home_team && m.away_team ? `(${m.home_team} vs ${m.away_team})` : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          Google Sheet (URL or ID)
-          <input
-            value={sheetRef}
-            onChange={(e) => setSheetRef(e.target.value)}
-            placeholder="https://docs.google.com/spreadsheets/d/... 또는 sheet_id"
-            disabled={sheetLoading}
-          />
-        </label>
-        <div className="row">
-          <button type="button" onClick={handleSaveSheetMapping} disabled={sheetSaving || sheetLoading || !matchId}>
-            {sheetSaving ? "Saving..." : "Save Sheet Mapping"}
-          </button>
-          <button type="button" onClick={handleClearSheetMapping} disabled={sheetSaving || sheetLoading || !matchId}>
-            Clear Mapping
-          </button>
-        </div>
-        {mappedSheetUrl && (
-          <p className="muted">
-            Mapped sheet: <a href={mappedSheetUrl} target="_blank" rel="noreferrer">{mappedSheetUrl}</a>
-          </p>
-        )}
-        {sheetMessage && <p className="muted">{sheetMessage}</p>}
-
-        <label className="check-row">
-          <input
-            type="checkbox"
-            checked={generateVideo}
-            onChange={(e) => setGenerateVideo(e.target.checked)}
-          />
-          Generate full animation video now
-        </label>
-
-        <div className="row">
-          <button type="button" className="primary" onClick={handleCreate} disabled={creating}>
-            {creating ? "Creating..." : "Create Session"}
-          </button>
-          <button type="button" onClick={handleOpenLatest} disabled={openingLatest || !matchId}>
-            {openingLatest ? "Opening..." : "Open latest"}
-          </button>
-          {matchId && (
-            <a href={`/m/${encodeURIComponent(matchId)}`} target="_blank" rel="noreferrer">
-              Open latest (new tab)
-            </a>
-          )}
-        </div>
-
-        {selectedMatchLabel && <p className="muted">Selected: {selectedMatchLabel}</p>}
-      </div>
-
-      {status && (
-        <div className="card">
-          <h2>Build Status</h2>
-          <p>Session ID: {status.session_id}</p>
-          <p>Status: {status.status}</p>
-          <p>Progress: {status.progress ?? "-"}</p>
-          <p>Sheet Tab: {status.sheet_tab_name ?? "-"}</p>
-          {status.sheet_url && (
-            <p>
-              Sheet:{" "}
-              <a href={status.sheet_url} target="_blank" rel="noreferrer">
-                Open sheet
-              </a>
-            </p>
-          )}
-          {status.error_message && <pre className="error-box">{status.error_message}</pre>}
-        </div>
-      )}
-
-      <div className="card">
-        <div className="section-header">
-          <h2>Recent Sessions</h2>
-          <button type="button" onClick={() => void loadRecentSessions()} disabled={loadingRecentSessions}>
-            {loadingRecentSessions ? "Refreshing..." : "Refresh"}
-          </button>
-        </div>
-        <div className="table-wrap">
-          <table className="event-table">
-            <thead>
-              <tr>
-                <th>Updated</th>
-                <th>Match</th>
-                <th>Session ID</th>
-                <th>Status</th>
-                <th>Sheet</th>
-                <th>Sheet Tab</th>
-                <th>Open Annotate</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recentSessions.map((session) => (
-                <tr key={session.session_id}>
-                  <td>{formatDateTime(session.updated_at)}</td>
-                  <td>{session.match_id}</td>
-                  <td className="event-cell-primary">{session.session_id}</td>
-                  <td title={session.progress ?? undefined}>
-                    {session.status}
-                    {session.progress ? (
-                      <div className="event-cell-secondary">{session.progress}</div>
-                    ) : null}
-                  </td>
-                  <td>
-                    {(session.sheet_url?.trim() || matchSheetUrls[session.match_id]) ? (
-                      <a
-                        href={session.sheet_url?.trim() || matchSheetUrls[session.match_id]}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open sheet
-                      </a>
-                    ) : (
-                      <span className="muted">-</span>
-                    )}
-                  </td>
-                  <td>
-                    {(session.sheet_tab_url?.trim() || session.sheet_tab_name) ? (
-                      <a
-                        href={session.sheet_tab_url?.trim() || (session.sheet_url?.trim() || matchSheetUrls[session.match_id])}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {session.sheet_tab_name || "Open tab"}
-                      </a>
-                    ) : (
-                      <span className="muted">-</span>
-                    )}
-                  </td>
-                  <td>
-                    <a href={`/annotate/m/${encodeURIComponent(session.match_id)}`} target="_blank" rel="noreferrer">
-                      {`/annotate/m/${session.match_id}`}
-                    </a>
-                  </td>
-                </tr>
-              ))}
-              {recentSessions.length === 0 && (
+      {createMode === "existing" ? (
+        <section className="card recent-panel">
+          <div className="section-header">
+            <h2>Recent Sessions</h2>
+            <button type="button" onClick={() => void loadRecentSessions()} disabled={loadingRecentSessions}>
+              {loadingRecentSessions ? "Refreshing..." : "Refresh"}
+            </button>
+          </div>
+          <div className="table-wrap session-table-wrap">
+            <table className="event-table session-table">
+              <thead>
                 <tr>
-                  <td colSpan={7} className="muted">
-                    No sessions yet.
-                  </td>
+                  <th>Updated</th>
+                  <th>Track</th>
+                  <th>Label</th>
+                  <th>Session ID</th>
+                  <th>Status</th>
+                  <th>Persist</th>
+                  <th>Open</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+              </thead>
+              <tbody>
+                {recentSessions.map((session) => {
+                  const openUrl = `/annotate/${encodeURIComponent(session.session_id)}`;
+                  const label = session.session_name?.trim() || session.match_id;
+                  return (
+                    <tr key={session.session_id}>
+                      <td>{formatDateTime(session.updated_at)}</td>
+                      <td>{getTrackLabel(session)}</td>
+                      <td className="event-cell-primary">{label}</td>
+                      <td>{session.session_id}</td>
+                      <td title={session.progress ?? undefined}>
+                        {session.status}
+                        {session.progress ? <div className="event-cell-secondary">{session.progress}</div> : null}
+                      </td>
+                      <td>{getPersistLabel(session)}</td>
+                      <td>
+                        <a href={openUrl} target="_blank" rel="noreferrer">
+                          Open
+                        </a>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {recentSessions.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="muted">
+                      Empty
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
 
       {error && <pre className="error-box">{error}</pre>}
     </div>

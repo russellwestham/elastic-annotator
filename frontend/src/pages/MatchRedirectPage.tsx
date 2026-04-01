@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { fetchLatestSessionForMatch, fetchSheetMapping } from "../api";
+import { fetchLatestSessionForMatch } from "../api";
 
 export function MatchRedirectPage() {
   const { matchId = "" } = useParams();
@@ -19,20 +19,14 @@ export function MatchRedirectPage() {
       }
 
       try {
-        const mapping = await fetchSheetMapping(normalizedMatchId);
-        if (cancelled) return;
-        const sheetUrl = mapping.sheet_url?.trim();
-        if (sheetUrl) {
-          window.location.replace(sheetUrl);
-          return;
-        }
-
         const latest = await fetchLatestSessionForMatch(normalizedMatchId);
         if (cancelled) return;
         if (latest?.session_id) {
-          setHasFallbackSession(true);
+          window.location.replace(`/annotate/${encodeURIComponent(latest.session_id)}`);
+          return;
         }
-        setError(`No mapped Google Sheet for match_id=${normalizedMatchId}`);
+        setHasFallbackSession(false);
+        setError(`No session found for match_id=${normalizedMatchId}`);
       } catch (err) {
         if (cancelled) return;
         const latest = await fetchLatestSessionForMatch(normalizedMatchId);
@@ -53,7 +47,7 @@ export function MatchRedirectPage() {
     return (
       <div className="page">
         <div className="card">
-          <h2>Opening match sheet...</h2>
+          <h2>Opening latest session...</h2>
           <p className="muted">match_id: {matchId}</p>
         </div>
       </div>
@@ -63,7 +57,7 @@ export function MatchRedirectPage() {
   return (
     <div className="page">
       <div className="card">
-        <h2>Cannot open match sheet</h2>
+        <h2>Cannot open session</h2>
         <pre className="error-box">{error}</pre>
         {hasFallbackSession && (
           <p>

@@ -14,12 +14,6 @@ export interface MatchSummary {
   away_team?: string | null;
 }
 
-export interface SheetMapping {
-  match_id: string;
-  sheet_id?: string | null;
-  sheet_url?: string | null;
-}
-
 export interface DefaultDatasetRoot {
   dataset_root: string;
   exists: boolean;
@@ -29,6 +23,9 @@ export interface SessionStatus {
   session_id: string;
   annotator_name: string;
   match_id: string;
+  session_mode: "legacy_elastic" | "upload_csv";
+  persist: boolean;
+  session_name?: string | null;
   status: "processing" | "ready" | "error";
   dataset_root: string;
   progress?: string | null;
@@ -39,11 +36,6 @@ export interface SessionStatus {
   fps?: number | null;
   video_url?: string | null;
   video_urls?: string[] | null;
-  sheet_url?: string | null;
-  sheet_tab_name?: string | null;
-  sheet_gid?: string | null;
-  sheet_tab_url?: string | null;
-  sheet_sync_error?: string | null;
 }
 
 export interface EventRow {

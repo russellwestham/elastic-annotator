@@ -3,12 +3,12 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
-import time
 import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 
 from backend.app.core.constants import SPADL_EXTENDED_TYPES
 from backend.app.core.settings import PROJECT_ROOT, get_settings
@@ -20,25 +20,19 @@ from backend.app.schemas.api import (
     EventSaveRequest,
     EventSaveResponse,
     MatchSummary,
-    SheetMappingResponse,
-    SheetMappingUpdateRequest,
     SessionCreateRequest,
     SessionStatusResponse,
 )
 from backend.app.services.elastic_pipeline import ElasticPipelineService
-from backend.app.services.sheet_mapping_store import SheetMappingStore
 from backend.app.services.session_store import SessionStore
-from backend.app.services.sheets import GoogleSheetsService
+from backend.app.services.upload_sessions import UploadSessionService
 
 settings = get_settings()
 store = SessionStore(settings.sessions_root)
-sheets = GoogleSheetsService(settings)
-sheet_mappings = SheetMappingStore(settings.sheet_mappings_path)
-pipeline = ElasticPipelineService(settings, store, sheets, sheet_mappings)
+pipeline = ElasticPipelineService(settings, store)
+upload_sessions = UploadSessionService(store)
 
 router = APIRouter(prefix="/api", tags=["api"])
-SHEET_TAB_CHECK_CACHE: dict[str, tuple[float, bool]] = {}
-SHEET_TAB_CHECK_CACHE_TTL_SEC = 60.0
 
 
 def _spawn_session_build(session_id: str) -> None:
@@ -77,18 +71,13 @@ def _detect_dataset_root(extracted_root: Path) -> Path:
 
 
 def _to_status_response(metadata: dict) -> SessionStatusResponse:
-    sheet_tab_name = metadata.get("sheet_tab_name") or GoogleSheetsService.normalize_annotator_name(
-        metadata.get("annotator_name")
-    )
-    sheet_gid = metadata.get("sheet_gid")
-    sheet_url = metadata.get("sheet_url")
-    sheet_tab_url = metadata.get("sheet_tab_url") or (
-        GoogleSheetsService.build_sheet_tab_url(sheet_url, sheet_gid) if sheet_url else None
-    )
     return SessionStatusResponse(
         session_id=metadata["session_id"],
         annotator_name=metadata["annotator_name"],
         match_id=metadata["match_id"],
+        session_mode=metadata.get("session_mode", "legacy_elastic"),
+        persist=bool(metadata.get("persist", True)),
+        session_name=metadata.get("session_name"),
         status=metadata["status"],
         dataset_root=metadata["dataset_root"],
         progress=metadata.get("progress"),
@@ -99,11 +88,6 @@ def _to_status_response(metadata: dict) -> SessionStatusResponse:
         fps=metadata.get("fps"),
         video_url=metadata.get("video_url"),
         video_urls=metadata.get("video_urls"),
-        sheet_url=sheet_url,
-        sheet_tab_name=sheet_tab_name,
-        sheet_gid=sheet_gid,
-        sheet_tab_url=sheet_tab_url,
-        sheet_sync_error=metadata.get("sheet_sync_error"),
     )
 
 
@@ -137,63 +121,10 @@ def _session_has_video_artifact(metadata: dict) -> bool:
     return has_any
 
 
-def _session_has_valid_sheet_tab(metadata: dict) -> bool:
-    if not sheets.enabled:
-        return True
-    if metadata.get("sheet_sync_error"):
-        # Known sync/provisioning failure should not invalidate ready video sessions.
-        return True
-
-    match_id = str(metadata.get("match_id") or "").strip()
-    sheet_tab_name = str(
-        metadata.get("sheet_tab_name")
-        or GoogleSheetsService.normalize_annotator_name(metadata.get("annotator_name"))
-        or ""
-    ).strip()
-    sheet_gid = str(metadata.get("sheet_gid") or "").strip()
-    if not sheet_tab_name and not sheet_gid:
-        return False
-
-    sheet_id = sheet_mappings.get_sheet_id(match_id)
-    if not sheet_id:
-        sheet_url = str(metadata.get("sheet_url") or "").strip()
-        if sheet_url:
-            try:
-                sheet_id = sheets.normalize_sheet_id(sheet_url)
-            except ValueError:
-                sheet_id = None
-    if not sheet_id:
-        return False
-
-    cache_key = f"{match_id}|{sheet_id}|{sheet_tab_name.lower()}|{sheet_gid}"
-    now = time.monotonic()
-    cached = SHEET_TAB_CHECK_CACHE.get(cache_key)
-    if cached is not None:
-        checked_at, exists = cached
-        if now - checked_at <= SHEET_TAB_CHECK_CACHE_TTL_SEC:
-            return exists
-
-    try:
-        exists = sheets.worksheet_exists(
-            match_id,
-            sheet_id=sheet_id,
-            worksheet_name=sheet_tab_name or None,
-            worksheet_gid=sheet_gid or None,
-        )
-    except Exception:
-        # Transient Google API failures should not immediately invalidate a ready session.
-        return True
-
-    SHEET_TAB_CHECK_CACHE[cache_key] = (now, exists)
-    return exists
-
-
 def _ready_integrity_reasons(metadata: dict) -> list[str]:
     reasons: list[str] = []
     if not _session_has_video_artifact(metadata):
         reasons.append("video_not_prepared")
-    if not _session_has_valid_sheet_tab(metadata):
-        reasons.append("sheet_tab_missing_or_invalid")
     return reasons
 
 
@@ -254,9 +185,10 @@ def _normalize_session_integrity(metadata: dict) -> dict:
     return normalized
 
 
-def _to_sheet_mapping_response(match_id: str, sheet_id: str | None) -> SheetMappingResponse:
-    sheet_url = GoogleSheetsService.build_sheet_url(sheet_id) if sheet_id else None
-    return SheetMappingResponse(match_id=match_id, sheet_id=sheet_id, sheet_url=sheet_url)
+def _collect_validation_warnings(metadata: dict, events: list[dict]) -> list[str]:
+    stored = metadata.get("validation_warnings") or []
+    dynamic = pipeline.validate_events(events)
+    return [str(item) for item in [*stored, *dynamic] if str(item).strip()]
 
 
 @router.get("/health")
@@ -282,33 +214,6 @@ def list_matches(dataset_root: str | None = None) -> list[MatchSummary]:
     return [MatchSummary(**m) for m in matches]
 
 
-@router.get("/sheet-mappings/{match_id}", response_model=SheetMappingResponse)
-def get_sheet_mapping(match_id: str) -> SheetMappingResponse:
-    sheet_id = sheet_mappings.get_sheet_id(match_id)
-    if not sheet_id:
-        discovered_sheet_id = sheets.find_existing_sheet_id(match_id)
-        if discovered_sheet_id:
-            sheet_mappings.set_sheet_id(match_id, discovered_sheet_id)
-            sheet_id = discovered_sheet_id
-    return _to_sheet_mapping_response(match_id, sheet_id)
-
-
-@router.put("/sheet-mappings/{match_id}", response_model=SheetMappingResponse)
-def upsert_sheet_mapping(match_id: str, request: SheetMappingUpdateRequest) -> SheetMappingResponse:
-    try:
-        normalized_sheet_id = sheets.normalize_sheet_id(request.sheet_ref)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    sheet_mappings.set_sheet_id(match_id, normalized_sheet_id)
-    return _to_sheet_mapping_response(match_id, normalized_sheet_id)
-
-
-@router.delete("/sheet-mappings/{match_id}", response_model=SheetMappingResponse)
-def clear_sheet_mapping(match_id: str) -> SheetMappingResponse:
-    sheet_mappings.clear_sheet_id(match_id)
-    return _to_sheet_mapping_response(match_id, None)
-
-
 @router.post(
     "/sessions",
     response_model=SessionStatusResponse,
@@ -321,7 +226,11 @@ def create_session(request: SessionCreateRequest) -> SessionStatusResponse:
     if not dataset_root.exists():
         raise HTTPException(status_code=400, detail=f"dataset_root not found: {dataset_root}")
 
-    existing = store.find_processing_session(match_id=request.match_id, dataset_root=str(dataset_root))
+    existing = store.find_processing_session(
+        match_id=request.match_id,
+        dataset_root=str(dataset_root),
+        session_mode="legacy_elastic",
+    )
     if existing is not None:
         return _to_status_response(existing)
 
@@ -334,6 +243,26 @@ def create_session(request: SessionCreateRequest) -> SessionStatusResponse:
 
     _spawn_session_build(metadata["session_id"])
 
+    return _to_status_response(metadata)
+
+
+@router.post(
+    "/upload-sessions",
+    response_model=SessionStatusResponse,
+    responses={400: {"model": ErrorResponse}},
+)
+def create_upload_session(
+    video_file: UploadFile = File(...),
+    csv_file: UploadFile = File(...),
+    persist: bool = Form(default=False),
+    session_name: str | None = Form(default=None),
+) -> SessionStatusResponse:
+    metadata = upload_sessions.create_upload_session(
+        video_file=video_file,
+        csv_file=csv_file,
+        persist=persist,
+        session_name=session_name,
+    )
     return _to_status_response(metadata)
 
 
@@ -352,11 +281,21 @@ def list_sessions(
     limit: int = Query(default=20, ge=1, le=200),
     status: str | None = Query(default=None),
     match_id: str | None = Query(default=None),
+    session_mode: str | None = Query(default=None),
+    include_ephemeral: bool = Query(default=False),
 ) -> list[SessionStatusResponse]:
     if status is not None and status not in {"processing", "ready", "error"}:
         raise HTTPException(status_code=400, detail="status must be one of: processing, ready, error")
+    if session_mode is not None and session_mode not in {"legacy_elastic", "upload_csv"}:
+        raise HTTPException(status_code=400, detail="session_mode must be one of: legacy_elastic, upload_csv")
     base_limit = 100_000 if status is not None else limit
-    sessions = store.list_sessions(limit=base_limit, status=None, match_id=match_id)
+    sessions = store.list_sessions(
+        limit=base_limit,
+        status=None,
+        match_id=match_id,
+        session_mode=session_mode,
+        include_ephemeral=include_ephemeral,
+    )
     normalized: list[dict] = []
     for metadata in sessions:
         normalized.append(_normalize_session_integrity(metadata))
@@ -412,82 +351,38 @@ def resume_session(session_id: str, force: bool = Query(default=False)) -> Sessi
 @router.get("/sessions/{session_id}/events", response_model=EventListResponse)
 def get_events(session_id: str) -> EventListResponse:
     try:
+        metadata = store.load_metadata(session_id)
         events = store.load_events(session_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    warnings = pipeline.validate_events(events)
+    warnings = _collect_validation_warnings(metadata, events)
     return EventListResponse(session_id=session_id, events=events, validation_warnings=warnings)
 
 
 @router.put("/sessions/{session_id}/events", response_model=EventSaveResponse)
 def save_events(session_id: str, request: EventSaveRequest) -> EventSaveResponse:
     try:
-        _ = store.load_metadata(session_id)
+        metadata = store.load_metadata(session_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     events = [event.model_dump() for event in request.events]
-    warnings = pipeline.validate_events(events)
+    warnings = _collect_validation_warnings(metadata, events)
     store.save_events(session_id, events)
     store.update_metadata(session_id, event_count=len(events), progress="autosaved")
-
-    sheet_synced = False
-    if request.sync_sheet and sheets.enabled:
-        try:
-            pipeline.sync_sheet(session_id)
-            sheet_synced = True
-        except Exception as exc:
-            store.update_metadata(session_id, sheet_sync_error=str(exc))
-            warnings.append(f"google sheet sync failed: {exc}")
 
     return EventSaveResponse(
         ok=True,
         saved_count=len(events),
         validation_warnings=warnings,
-        sheet_synced=sheet_synced,
     )
 
 
-@router.post("/sessions/{session_id}/sync-sheet")
-def sync_sheet(session_id: str) -> dict[str, str | None]:
-    try:
-        _ = store.load_metadata(session_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-    if not sheets.enabled:
-        raise HTTPException(status_code=400, detail="Google Sheets integration is disabled")
-
-    try:
-        url = pipeline.sync_sheet(session_id)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"sheet_url": url}
-
-
-@router.post("/sessions/{session_id}/reset-sheet")
-def reset_sheet(session_id: str) -> dict[str, str | None]:
-    try:
-        _ = store.load_metadata(session_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-    if not sheets.enabled:
-        raise HTTPException(status_code=400, detail="Google Sheets integration is disabled")
-
-    try:
-        url = pipeline.reset_sheet(session_id)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return {"sheet_url": url}
-
-
 @router.post("/sessions/{session_id}/reset-events")
-def reset_events(session_id: str, sync_sheet: bool = Query(default=True)) -> dict[str, object]:
+def reset_events(session_id: str) -> dict[str, object]:
     try:
-        _ = store.load_metadata(session_id)
+        metadata = store.load_metadata(session_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -496,21 +391,44 @@ def reset_events(session_id: str, sync_sheet: bool = Query(default=True)) -> dic
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    warnings = pipeline.validate_events(events)
-    sheet_url = None
-    if sync_sheet and sheets.enabled:
-        try:
-            sheet_url = pipeline.sync_sheet(session_id)
-        except Exception as exc:
-            warnings.append(f"google sheet sync failed: {exc}")
-
+    warnings = _collect_validation_warnings(metadata, events)
     return {
         "ok": True,
         "restored_count": len(events),
         "source": source,
         "validation_warnings": warnings,
-        "sheet_url": sheet_url,
     }
+
+
+@router.get("/sessions/{session_id}/export.csv")
+def export_session_csv(
+    session_id: str,
+    variant: str = Query(default="current"),
+) -> FileResponse:
+    if variant not in {"current", "initial"}:
+        raise HTTPException(status_code=400, detail="variant must be one of: current, initial")
+
+    try:
+        metadata = store.load_metadata(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if variant == "initial":
+        try:
+            events = store.load_initial_events(session_id)
+        except FileNotFoundError:
+            events = store.load_events(session_id)
+    else:
+        events = store.load_events(session_id)
+
+    if not events:
+        events = store.load_events(session_id)
+
+    export_path = upload_sessions.export_events_csv(session_id, events, variant=variant)
+    match_label = str(metadata.get("match_id") or session_id).strip() or session_id
+    suffix = "original" if variant == "initial" else "edited"
+    filename = f"{match_label}_{suffix}_gt_events.csv"
+    return FileResponse(path=export_path, filename=filename, media_type="text/csv")
 
 
 @router.post("/datasets/upload", response_model=DatasetUploadResponse)

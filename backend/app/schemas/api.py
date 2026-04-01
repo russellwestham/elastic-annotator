@@ -37,16 +37,6 @@ class SessionCreateRequest(BaseModel):
     generate_video: bool = True
 
 
-class SheetMappingUpdateRequest(BaseModel):
-    sheet_ref: str = Field(min_length=1, max_length=500)
-
-
-class SheetMappingResponse(BaseModel):
-    match_id: str
-    sheet_id: str | None = None
-    sheet_url: str | None = None
-
-
 class EventRow(BaseModel):
     id: str
     period_id: int
@@ -69,6 +59,9 @@ class SessionStatusResponse(BaseModel):
     session_id: str
     annotator_name: str
     match_id: str
+    session_mode: Literal["legacy_elastic", "upload_csv"] = "legacy_elastic"
+    persist: bool = True
+    session_name: str | None = None
     status: Literal["processing", "ready", "error"]
     dataset_root: str
     progress: str | None = None
@@ -79,11 +72,6 @@ class SessionStatusResponse(BaseModel):
     fps: float | None = None
     video_url: str | None = None
     video_urls: list[str] | None = None
-    sheet_url: str | None = None
-    sheet_tab_name: str | None = None
-    sheet_gid: str | None = None
-    sheet_tab_url: str | None = None
-    sheet_sync_error: str | None = None
 
 
 class EventListResponse(BaseModel):
@@ -94,14 +82,12 @@ class EventListResponse(BaseModel):
 
 class EventSaveRequest(BaseModel):
     events: list[EventRow]
-    sync_sheet: bool = True
 
 
 class EventSaveResponse(BaseModel):
     ok: bool
     saved_count: int
     validation_warnings: list[str] = []
-    sheet_synced: bool = False
 
 
 class DatasetUploadResponse(BaseModel):

@@ -44,13 +44,6 @@ DEFAULT_DATASET_ROOT=/absolute/path/to/sportec
 
 SESSIONS_ROOT=/absolute/path/to/elastic-annotator/backend/storage/sessions
 DATASETS_ROOT=/absolute/path/to/elastic-annotator/backend/storage/datasets
-SHEET_MAPPINGS_PATH=/absolute/path/to/elastic-annotator/backend/storage/sheet_mappings.json
-
-ENABLE_GOOGLE_SHEETS=true
-GOOGLE_SERVICE_ACCOUNT_JSON=/absolute/path/to/service-account.json
-GOOGLE_SHEET_SHARE_EMAILS=user1@gmail.com,user2@gmail.com,user3@gmail.com
-GOOGLE_SHEET_SHARE_ROLE=writer
-GOOGLE_SHEET_SHARE_NOTIFY=false
 ```
 
 ## 3) Run backend in production mode
@@ -129,6 +122,4 @@ sudo systemctl restart elastic-annotator
 Back up these paths regularly:
 
 - `backend/storage/sessions/`
-- `backend/storage/sheet_mappings.json`
 - `.env`
-- Google service account key JSON
