@@ -841,6 +841,7 @@ a.button-link.primary .spinner {
 }
 
 .annot-header {
+  width: 100%;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -928,14 +929,17 @@ a.button-link.primary .spinner {
 }
 
 .annot-layout {
+  width: 100%;
   display: grid;
-  grid-template-columns: minmax(460px, 1.03fr) minmax(560px, 1fr);
+  grid-template-columns: minmax(0, 1.03fr) minmax(0, 1fr);
   gap: 0.9rem;
   align-items: start;
 }
 
 .workspace-card {
   border-radius: 18px;
+  width: 100%;
+  min-width: 0;
 }
 
 .video-panel video {
@@ -988,12 +992,14 @@ a.button-link.primary .spinner {
 .editor-stack {
   display: grid;
   gap: 0.9rem;
+  min-width: 0;
 }
 
 .timeline-panel,
 .inspector-panel,
 .review-panel {
   background: var(--surface);
+  min-width: 0;
 }
 
 .timeline-hud {

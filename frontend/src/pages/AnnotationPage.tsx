@@ -242,6 +242,31 @@ function median(values: number[]): number {
   return sorted[mid] ?? 0;
 }
 
+function inferVideoStartFrame(rows: EventRow[], fps: number): number {
+  if (!Number.isFinite(fps) || fps <= 0) return 0;
+
+  const anchors: number[] = [];
+  for (const row of rows) {
+    if (typeof row.synced_frame_id === "number") {
+      const seconds = parseTimestampToSeconds(row.synced_ts);
+      if (seconds !== null) {
+        anchors.push(row.synced_frame_id - seconds * fps);
+      }
+    }
+    if (typeof row.receive_frame_id === "number") {
+      const seconds = parseTimestampToSeconds(row.receive_ts);
+      if (seconds !== null) {
+        anchors.push(row.receive_frame_id - seconds * fps);
+      }
+    }
+  }
+
+  if (anchors.length === 0) {
+    return 0;
+  }
+  return Math.max(0, Math.round(median(anchors)));
+}
+
 function buildPeriodOffsetMap(rows: EventRow[], fps: number): { byPeriod: Map<number, number>; fallback: number } {
   const grouped = new Map<number, number[]>();
   for (const row of rows) {
@@ -456,6 +481,10 @@ export function AnnotationPage() {
   const segmentRanges = useMemo(() => {
     return videoCandidates.map((path) => parseSegmentFrameRange(path));
   }, [videoCandidates]);
+  const hasSegmentRanges = useMemo(
+    () => segmentRanges.some((range) => range !== null),
+    [segmentRanges],
+  );
   const segmentOptionLabels = useMemo(() => {
     return videoCandidates.map((_, idx) => {
       const range = segmentRanges[idx];
@@ -471,12 +500,21 @@ export function AnnotationPage() {
   }, [fps, segmentRanges, videoCandidates]);
 
   const segmentStartFrame = useMemo(() => {
-    if (segmentRanges.length === 0) return 0;
+    if (!hasSegmentRanges) return 0;
     const safeIndex = Math.min(Math.max(selectedVideoIndex, 0), segmentRanges.length - 1);
     return segmentRanges[safeIndex]?.start ?? 0;
-  }, [selectedVideoIndex, segmentRanges]);
+  }, [hasSegmentRanges, selectedVideoIndex, segmentRanges]);
 
-  const currentFrame = segmentStartFrame + Math.round(currentTime * fps);
+  const inferredStartFrame = useMemo(() => {
+    if (!isUploadSession) {
+      return 0;
+    }
+    return inferVideoStartFrame(events, fps);
+  }, [events, fps, isUploadSession]);
+
+  const playheadStartFrame = hasSegmentRanges ? segmentStartFrame : inferredStartFrame;
+
+  const currentFrame = playheadStartFrame + Math.round(currentTime * fps);
   const selectedFrameDelta = selectedAnchorFrame === null ? null : selectedAnchorFrame - currentFrame;
   const saveStateLabel = saveState === "saving"
     ? "Saving changes"
@@ -885,8 +923,8 @@ export function AnnotationPage() {
       return;
     }
 
-    if (segmentRanges.length === 0) {
-      const targetTime = Math.max(0, absoluteFrame / fps);
+    if (!hasSegmentRanges) {
+      const targetTime = Math.max(0, (absoluteFrame - playheadStartFrame) / fps);
       if (videoRef.current) {
         videoRef.current.currentTime = targetTime;
       }
@@ -894,13 +932,18 @@ export function AnnotationPage() {
       return;
     }
 
-    let targetIndex = segmentRanges.findIndex((range) => {
-      if (!range) return false;
-      return absoluteFrame >= range.start && absoluteFrame <= range.end;
-    });
+    const rangedSegments = segmentRanges
+      .map((range, index) => ({ range, index }))
+      .filter((item): item is { range: { start: number; end: number }; index: number } => item.range !== null);
+    if (rangedSegments.length === 0) {
+      return;
+    }
 
+    let targetIndex = rangedSegments.find((item) => absoluteFrame >= item.range.start && absoluteFrame <= item.range.end)?.index ?? -1;
     if (targetIndex < 0) {
-      targetIndex = absoluteFrame < (segmentRanges[0]?.start ?? 0) ? 0 : segmentRanges.length - 1;
+      const first = rangedSegments[0];
+      const last = rangedSegments[rangedSegments.length - 1];
+      targetIndex = absoluteFrame < first.range.start ? first.index : last.index;
     }
 
     const targetRange = segmentRanges[targetIndex];

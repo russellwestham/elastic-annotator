@@ -147,8 +147,9 @@ export async function createUploadSession(payload: {
   formData.append("video_file", payload.videoFile);
   formData.append("csv_file", payload.csvFile);
   formData.append("persist", String(payload.persist));
-  if (payload.sessionName?.trim()) {
-    formData.append("session_name", payload.sessionName.trim());
+  const normalizedSessionName = payload.sessionName?.trim() || payload.csvFile.name?.trim();
+  if (normalizedSessionName) {
+    formData.append("session_name", normalizedSessionName);
   }
 
   const response = await fetch(`${API_BASE}/api/upload-sessions`, {

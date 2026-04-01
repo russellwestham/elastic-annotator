@@ -243,11 +243,12 @@ class UploadSessionService:
         video_suffix = Path(video_file.filename or "video.mp4").suffix.lower() or ".mp4"
         if video_suffix not in {".mp4", ".mov", ".m4v", ".webm"}:
             raise HTTPException(status_code=400, detail="Video upload must be mp4/mov/m4v/webm")
-        csv_suffix = Path(csv_file.filename or "events.csv").suffix.lower()
+        uploaded_csv_name = (Path(csv_file.filename or "uploaded_events.csv").name or "uploaded_events.csv").strip()
+        csv_suffix = Path(uploaded_csv_name).suffix.lower()
         if csv_suffix != ".csv":
-            raise HTTPException(status_code=400, detail="events_seed upload must be a .csv file")
+            raise HTTPException(status_code=400, detail="CSV upload must be a .csv file")
 
-        inferred_name = self._sanitize_name(Path(csv_file.filename or "uploaded").stem)
+        inferred_name = self._sanitize_name(Path(uploaded_csv_name).stem)
         metadata = self.store.create_session(
             annotator_name="uploaded",
             match_id=inferred_name,
@@ -255,7 +256,7 @@ class UploadSessionService:
             generate_video=False,
             session_mode="upload_csv",
             persist=persist,
-            session_name=session_name or inferred_name,
+            session_name=session_name or uploaded_csv_name,
         )
         session_id = metadata["session_id"]
         session_dir = self.store.session_dir(session_id)

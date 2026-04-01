@@ -40,7 +40,7 @@ export function SessionCreatePage() {
 
   const annotatorName = "kunhee";
   const [datasetRoot, setDatasetRoot] = useState("");
-  const [generateVideo] = useState(false);
+  const [generateVideo] = useState(true);
   const [matches, setMatches] = useState<MatchSummary[]>([]);
   const [matchId, setMatchId] = useState("");
 
@@ -89,13 +89,6 @@ export function SessionCreatePage() {
     void loadMatches();
     void loadRecentSessions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      void loadRecentSessions();
-    }, 10000);
-    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -394,7 +387,7 @@ export function SessionCreatePage() {
                   {uploadCsvFile?.name ?? "Drop file or click"}
                 </span>
                 <span className="upload-card-meta">
-                  {uploadCsvFile ? "Choose another file" : "events_seed.csv"}
+                  {uploadCsvFile ? "Choose another file" : "Any .csv file"}
                 </span>
                 <input
                   type="file"
