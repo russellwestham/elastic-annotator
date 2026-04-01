@@ -64,9 +64,36 @@ class ElasticPipelineService:
         metadata = self.store.load_metadata(session_id)
         dataset_root = Path(metadata["dataset_root"]).expanduser()
         match_id = metadata["match_id"]
-        annotator_name = metadata["annotator_name"]
 
         try:
+            if metadata.get("generate_video", True):
+                self.store.update_metadata(session_id, status="processing", progress="checking_cached_session")
+                cached_snapshot = self._reuse_public_session_snapshot_if_available(
+                    session_id=session_id,
+                    match_id=match_id,
+                    dataset_root=dataset_root,
+                )
+                if cached_snapshot is not None:
+                    rows, cached_fps, cached_video_urls = cached_snapshot
+                    self.store.update_metadata(
+                        session_id,
+                        progress="reusing_cached_session",
+                        video_url=cached_video_urls[0] if cached_video_urls else None,
+                        video_urls=cached_video_urls,
+                    )
+                    self.store.save_initial_events(session_id, rows)
+                    self.store.save_events(session_id, rows)
+                    self.store.update_metadata(
+                        session_id,
+                        status="ready",
+                        progress="done",
+                        event_count=len(rows),
+                        fps=float(cached_fps),
+                        video_url=cached_video_urls[0] if cached_video_urls else None,
+                        video_urls=cached_video_urls,
+                    )
+                    return
+
             self.store.update_metadata(session_id, status="processing", progress="loading_elastic")
             self._prepare_elastic_imports(dataset_root)
             self._patch_schema_validation()
@@ -274,10 +301,11 @@ class ElasticPipelineService:
         filename = url.split("/")[-1].strip()
         return filename or None
 
-    def _reuse_public_videos_if_available(self, *, session_id: str, match_id: str, dataset_root: Path) -> list[str]:
+    def _list_public_ready_candidates(self, *, session_id: str, match_id: str, dataset_root: Path) -> list[dict]:
         if not self._is_public_dataset_root(dataset_root):
             return []
 
+        normalized_dataset_root = str(self._normalize_path(dataset_root))
         candidates = self.store.list_sessions(
             limit=200,
             status="ready",
@@ -285,9 +313,8 @@ class ElasticPipelineService:
             session_mode="legacy_elastic",
             include_ephemeral=True,
         )
-        target_dir = self.store.session_dir(session_id)
-        normalized_dataset_root = str(self._normalize_path(dataset_root))
 
+        filtered: list[dict] = []
         for candidate in candidates:
             candidate_id = str(candidate.get("session_id") or "").strip()
             if not candidate_id or candidate_id == session_id:
@@ -302,56 +329,142 @@ class ElasticPipelineService:
             except Exception:
                 continue
 
+            filtered.append(candidate)
+
+        return filtered
+
+    def _resolve_candidate_video_sources(self, *, candidate_id: str, candidate_urls: list[str]) -> list[tuple[Path, str]]:
+        source_files: list[tuple[Path, str]] = []
+        for url in candidate_urls:
+            filename = self._extract_filename_from_artifact_url(url, candidate_id)
+            if not filename:
+                return []
+            source_path = self.store.session_dir(candidate_id) / filename
+            if not source_path.exists():
+                return []
+            source_files.append((source_path, filename))
+        return source_files
+
+    def _copy_reused_videos(
+        self,
+        *,
+        session_id: str,
+        candidate_id: str,
+        match_id: str,
+        source_files: list[tuple[Path, str]],
+    ) -> list[str]:
+        target_dir = self.store.session_dir(session_id)
+        reused_urls: list[str] = []
+        copied_destinations: list[Path] = []
+        try:
+            for source_path, filename in source_files:
+                dest_path = target_dir / filename
+                if dest_path.exists():
+                    dest_path.unlink()
+                try:
+                    os.link(source_path, dest_path)
+                except OSError:
+                    shutil.copy2(source_path, dest_path)
+                copied_destinations.append(dest_path)
+                reused_urls.append(f"/artifacts/sessions/{session_id}/{filename}")
+        except Exception:
+            for dest_path in copied_destinations:
+                dest_path.unlink(missing_ok=True)
+            logger.exception(
+                "Failed to reuse cached videos from session %s for %s",
+                candidate_id,
+                session_id,
+            )
+            return []
+
+        logger.info(
+            "Reused %d cached video segments from session %s for %s (match=%s)",
+            len(reused_urls),
+            candidate_id,
+            session_id,
+            match_id,
+        )
+        return reused_urls
+
+    def _reuse_public_session_snapshot_if_available(
+        self,
+        *,
+        session_id: str,
+        match_id: str,
+        dataset_root: Path,
+    ) -> tuple[list[dict], float, list[str]] | None:
+        for candidate in self._list_public_ready_candidates(
+            session_id=session_id,
+            match_id=match_id,
+            dataset_root=dataset_root,
+        ):
+            candidate_id = str(candidate.get("session_id") or "").strip()
+            if not candidate_id:
+                continue
+
+            try:
+                baseline_rows = self.store.load_initial_events(candidate_id)
+            except FileNotFoundError:
+                continue
+
+            if not isinstance(baseline_rows, list):
+                continue
+
+            candidate_fps_raw = candidate.get("fps")
+            try:
+                candidate_fps = float(candidate_fps_raw)
+            except (TypeError, ValueError):
+                continue
+
             candidate_urls = [str(item) for item in (candidate.get("video_urls") or []) if str(item).strip()]
             if not candidate_urls:
                 continue
 
-            source_files: list[tuple[Path, str]] = []
-            invalid_url_found = False
-            for url in candidate_urls:
-                filename = self._extract_filename_from_artifact_url(url, candidate_id)
-                if not filename:
-                    invalid_url_found = True
-                    break
-                source_path = self.store.session_dir(candidate_id) / filename
-                if not source_path.exists():
-                    invalid_url_found = True
-                    break
-                source_files.append((source_path, filename))
-            if invalid_url_found or not source_files:
+            source_files = self._resolve_candidate_video_sources(candidate_id=candidate_id, candidate_urls=candidate_urls)
+            if not source_files:
                 continue
 
-            reused_urls: list[str] = []
-            copied_destinations: list[Path] = []
-            try:
-                for source_path, filename in source_files:
-                    dest_path = target_dir / filename
-                    if dest_path.exists():
-                        dest_path.unlink()
-                    try:
-                        os.link(source_path, dest_path)
-                    except OSError:
-                        shutil.copy2(source_path, dest_path)
-                    copied_destinations.append(dest_path)
-                    reused_urls.append(f"/artifacts/sessions/{session_id}/{filename}")
-            except Exception:
-                for dest_path in copied_destinations:
-                    dest_path.unlink(missing_ok=True)
-                logger.exception(
-                    "Failed to reuse cached videos from session %s for %s",
-                    candidate_id,
-                    session_id,
-                )
-                continue
-
-            logger.info(
-                "Reused %d cached video segments from session %s for %s (match=%s)",
-                len(reused_urls),
-                candidate_id,
-                session_id,
-                match_id,
+            reused_urls = self._copy_reused_videos(
+                session_id=session_id,
+                candidate_id=candidate_id,
+                match_id=match_id,
+                source_files=source_files,
             )
-            return reused_urls
+            if not reused_urls:
+                continue
+
+            logger.info("Reused cached session snapshot from %s for %s", candidate_id, session_id)
+            copied_rows = [dict(row) if isinstance(row, dict) else row for row in baseline_rows]
+            return copied_rows, candidate_fps, reused_urls
+
+        return None
+
+    def _reuse_public_videos_if_available(self, *, session_id: str, match_id: str, dataset_root: Path) -> list[str]:
+        for candidate in self._list_public_ready_candidates(
+            session_id=session_id,
+            match_id=match_id,
+            dataset_root=dataset_root,
+        ):
+            candidate_id = str(candidate.get("session_id") or "").strip()
+            if not candidate_id:
+                continue
+
+            candidate_urls = [str(item) for item in (candidate.get("video_urls") or []) if str(item).strip()]
+            if not candidate_urls:
+                continue
+
+            source_files = self._resolve_candidate_video_sources(candidate_id=candidate_id, candidate_urls=candidate_urls)
+            if not source_files:
+                continue
+
+            reused_urls = self._copy_reused_videos(
+                session_id=session_id,
+                candidate_id=candidate_id,
+                match_id=match_id,
+                source_files=source_files,
+            )
+            if reused_urls:
+                return reused_urls
 
         return []
 
