@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import shutil
 import sys
 import traceback
 import xml.etree.ElementTree as ET
@@ -101,66 +103,82 @@ class ElasticPipelineService:
             video_frame_range: tuple[int, int] | None = None
 
             if metadata.get("generate_video", True):
-                self.store.update_metadata(session_id, progress="rendering_video")
-                # Avoid a second syncer.run(events=...) call: ELASTIC_NW internally appends
-                # foul alignment rows using self.events index, which can mismatch external
-                # event indices and raise KeyError during assignment.
-                synced_for_video = synced_with_controls.copy()
-                control_mask = synced_for_video["spadl_type"] == "control"
-                one_touch_mask = (synced_for_video["frame_id"].shift(-1) == synced_for_video["frame_id"]) | (
-                    synced_for_video["frame_id"].shift(-1).isna()
+                reused_urls = self._reuse_public_videos_if_available(
+                    session_id=session_id,
+                    match_id=match_id,
+                    dataset_root=dataset_root,
                 )
-                synced_for_video = synced_for_video.loc[~(control_mask & one_touch_mask)].reset_index(drop=True)
-                merged = MatchData.merge_synced_events_and_tracking(
-                    synced_for_video,
-                    match.tracking,
-                    match.fps,
-                    ffill=True,
-                )
-                segment_data = merged.set_index("frame_id").copy()
-                session_dir = self.store.session_dir(session_id)
-                writer = animation.FFMpegWriter(fps=match.fps)
-
-                if segment_data.empty:
-                    raise RuntimeError("No tracking rows available for video rendering")
-
-                start_frame = int(segment_data.index.min())
-                end_frame = int(segment_data.index.max())
-                video_frame_range = (start_frame, end_frame)
-                segment_frames = max(1, int(round(match.fps * self.settings.video_segment_seconds)))
-                total_segments = ((end_frame - start_frame) // segment_frames) + 1
-
-                for seg_idx, frame_from in enumerate(range(start_frame, end_frame + 1, segment_frames), start=1):
-                    frame_to = min(frame_from + segment_frames - 1, end_frame)
-                    segment_df = segment_data.loc[frame_from:frame_to].copy()
-                    if segment_df.shape[0] < 2:
-                        continue
-
+                if reused_urls:
+                    video_urls = reused_urls
+                    video_url = video_urls[0]
+                    video_frame_range = self._extract_video_frame_range({"video_urls": video_urls})
                     self.store.update_metadata(
                         session_id,
-                        progress=f"rendering_video {seg_idx}/{total_segments}",
-                    )
-
-                    animator = Animator({"main": segment_df}, show_events=True)
-                    anim = animator.run(fps=match.fps)
-
-                    seg_name = f"animation_{seg_idx:03d}_{frame_from}-{frame_to}.mp4"
-                    seg_path = session_dir / seg_name
-                    anim.save(str(seg_path), writer=writer)
-
-                    seg_url = f"/artifacts/sessions/{session_id}/{seg_name}"
-                    video_urls.append(seg_url)
-                    self.store.update_metadata(
-                        session_id,
-                        progress=f"rendering_video {seg_idx}/{total_segments}",
-                        video_url=video_urls[0],
+                        progress="rendering_video reused_from_cache",
+                        video_url=video_url,
                         video_urls=video_urls,
                     )
-
-                if video_urls:
-                    video_url = video_urls[0]
                 else:
-                    raise RuntimeError("Video rendering produced no segments")
+                    self.store.update_metadata(session_id, progress="rendering_video")
+                    # Avoid a second syncer.run(events=...) call: ELASTIC_NW internally appends
+                    # foul alignment rows using self.events index, which can mismatch external
+                    # event indices and raise KeyError during assignment.
+                    synced_for_video = synced_with_controls.copy()
+                    control_mask = synced_for_video["spadl_type"] == "control"
+                    one_touch_mask = (synced_for_video["frame_id"].shift(-1) == synced_for_video["frame_id"]) | (
+                        synced_for_video["frame_id"].shift(-1).isna()
+                    )
+                    synced_for_video = synced_for_video.loc[~(control_mask & one_touch_mask)].reset_index(drop=True)
+                    merged = MatchData.merge_synced_events_and_tracking(
+                        synced_for_video,
+                        match.tracking,
+                        match.fps,
+                        ffill=True,
+                    )
+                    segment_data = merged.set_index("frame_id").copy()
+                    session_dir = self.store.session_dir(session_id)
+                    writer = animation.FFMpegWriter(fps=match.fps)
+
+                    if segment_data.empty:
+                        raise RuntimeError("No tracking rows available for video rendering")
+
+                    start_frame = int(segment_data.index.min())
+                    end_frame = int(segment_data.index.max())
+                    video_frame_range = (start_frame, end_frame)
+                    segment_frames = max(1, int(round(match.fps * self.settings.video_segment_seconds)))
+                    total_segments = ((end_frame - start_frame) // segment_frames) + 1
+
+                    for seg_idx, frame_from in enumerate(range(start_frame, end_frame + 1, segment_frames), start=1):
+                        frame_to = min(frame_from + segment_frames - 1, end_frame)
+                        segment_df = segment_data.loc[frame_from:frame_to].copy()
+                        if segment_df.shape[0] < 2:
+                            continue
+
+                        self.store.update_metadata(
+                            session_id,
+                            progress=f"rendering_video {seg_idx}/{total_segments}",
+                        )
+
+                        animator = Animator({"main": segment_df}, show_events=True)
+                        anim = animator.run(fps=match.fps)
+
+                        seg_name = f"animation_{seg_idx:03d}_{frame_from}-{frame_to}.mp4"
+                        seg_path = session_dir / seg_name
+                        anim.save(str(seg_path), writer=writer)
+
+                        seg_url = f"/artifacts/sessions/{session_id}/{seg_name}"
+                        video_urls.append(seg_url)
+                        self.store.update_metadata(
+                            session_id,
+                            progress=f"rendering_video {seg_idx}/{total_segments}",
+                            video_url=video_urls[0],
+                            video_urls=video_urls,
+                        )
+
+                    if video_urls:
+                        video_url = video_urls[0]
+                    else:
+                        raise RuntimeError("Video rendering produced no segments")
 
             if video_frame_range is not None:
                 frame_start, frame_end = video_frame_range
@@ -237,6 +255,105 @@ class ElasticPipelineService:
     def _extract_match_id(filename: str) -> str | None:
         match = MATCH_ID_PATTERN.search(filename)
         return match.group(1) if match else None
+
+    @staticmethod
+    def _normalize_path(path_text: str | Path) -> Path:
+        return Path(path_text).expanduser().resolve()
+
+    def _is_public_dataset_root(self, dataset_root: Path) -> bool:
+        try:
+            return self._normalize_path(dataset_root) == self._normalize_path(self.settings.default_dataset_root)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _extract_filename_from_artifact_url(url: str, source_session_id: str) -> str | None:
+        prefix = f"/artifacts/sessions/{source_session_id}/"
+        if not url.startswith(prefix):
+            return None
+        filename = url.split("/")[-1].strip()
+        return filename or None
+
+    def _reuse_public_videos_if_available(self, *, session_id: str, match_id: str, dataset_root: Path) -> list[str]:
+        if not self._is_public_dataset_root(dataset_root):
+            return []
+
+        candidates = self.store.list_sessions(
+            limit=200,
+            status="ready",
+            match_id=match_id,
+            session_mode="legacy_elastic",
+            include_ephemeral=True,
+        )
+        target_dir = self.store.session_dir(session_id)
+        normalized_dataset_root = str(self._normalize_path(dataset_root))
+
+        for candidate in candidates:
+            candidate_id = str(candidate.get("session_id") or "").strip()
+            if not candidate_id or candidate_id == session_id:
+                continue
+
+            candidate_dataset_root = str(candidate.get("dataset_root") or "").strip()
+            if not candidate_dataset_root:
+                continue
+            try:
+                if str(self._normalize_path(candidate_dataset_root)) != normalized_dataset_root:
+                    continue
+            except Exception:
+                continue
+
+            candidate_urls = [str(item) for item in (candidate.get("video_urls") or []) if str(item).strip()]
+            if not candidate_urls:
+                continue
+
+            source_files: list[tuple[Path, str]] = []
+            invalid_url_found = False
+            for url in candidate_urls:
+                filename = self._extract_filename_from_artifact_url(url, candidate_id)
+                if not filename:
+                    invalid_url_found = True
+                    break
+                source_path = self.store.session_dir(candidate_id) / filename
+                if not source_path.exists():
+                    invalid_url_found = True
+                    break
+                source_files.append((source_path, filename))
+            if invalid_url_found or not source_files:
+                continue
+
+            reused_urls: list[str] = []
+            copied_destinations: list[Path] = []
+            try:
+                for source_path, filename in source_files:
+                    dest_path = target_dir / filename
+                    if dest_path.exists():
+                        dest_path.unlink()
+                    try:
+                        os.link(source_path, dest_path)
+                    except OSError:
+                        shutil.copy2(source_path, dest_path)
+                    copied_destinations.append(dest_path)
+                    reused_urls.append(f"/artifacts/sessions/{session_id}/{filename}")
+            except Exception:
+                for dest_path in copied_destinations:
+                    dest_path.unlink(missing_ok=True)
+                logger.exception(
+                    "Failed to reuse cached videos from session %s for %s",
+                    candidate_id,
+                    session_id,
+                )
+                continue
+
+            logger.info(
+                "Reused %d cached video segments from session %s for %s (match=%s)",
+                len(reused_urls),
+                candidate_id,
+                session_id,
+                match_id,
+            )
+            return reused_urls
+
+        return []
 
     def _prepare_elastic_imports(self, dataset_root: Path) -> None:
         repo_path = self.settings.elastic_repo_path.expanduser()
