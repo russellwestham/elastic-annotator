@@ -1493,10 +1493,6 @@ export function AnnotationPage() {
               <div className="frame-readout">
                 <div className="frame-readout-grid">
                   <div>
-                    <div className="frame-readout-label">Segment Time</div>
-                    <div className="frame-readout-main">{formatSeconds(currentTime)}</div>
-                  </div>
-                  <div>
                     <div className="frame-readout-label">Match Time</div>
                     <div className="frame-readout-main">{absoluteTimestamp}</div>
                   </div>
@@ -1504,9 +1500,6 @@ export function AnnotationPage() {
                     <div className="frame-readout-label">Playhead Frame</div>
                     <div className="frame-readout-main frame-readout-frame">{currentFrame}</div>
                   </div>
-                </div>
-                <div className="frame-readout-sub">
-                  Video start {playheadStartFrame} | Segment frame {currentSegmentFrame}
                 </div>
               </div>
               <video
