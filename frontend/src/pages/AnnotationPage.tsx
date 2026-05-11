@@ -1497,12 +1497,16 @@ export function AnnotationPage() {
                     <div className="frame-readout-main">{formatSeconds(currentTime)}</div>
                   </div>
                   <div>
+                    <div className="frame-readout-label">Match Time</div>
+                    <div className="frame-readout-main">{absoluteTimestamp}</div>
+                  </div>
+                  <div>
                     <div className="frame-readout-label">Playhead Frame</div>
                     <div className="frame-readout-main frame-readout-frame">{currentFrame}</div>
                   </div>
                 </div>
                 <div className="frame-readout-sub">
-                  Absolute time {absoluteTimestamp} | Video start {playheadStartFrame} | Segment frame {currentSegmentFrame}
+                  Video start {playheadStartFrame} | Segment frame {currentSegmentFrame}
                 </div>
               </div>
               <video
