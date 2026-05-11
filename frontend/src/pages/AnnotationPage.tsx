@@ -69,10 +69,6 @@ function getSegmentFrameFromTime(seconds: number, fps: number): number {
   return Math.max(0, Math.floor(seconds * fps + FRAME_TIME_EPSILON));
 }
 
-function getSegmentTimeForFrame(segmentFrame: number, fps: number): number {
-  return Math.max(0, segmentFrame) / fps;
-}
-
 function getSeekTimeForSegmentFrame(segmentFrame: number, fps: number, duration: number): number {
   const centeredTime = (Math.max(0, segmentFrame) + 0.5) / fps;
   if (!Number.isFinite(duration) || duration <= 0) {
@@ -546,7 +542,6 @@ export function AnnotationPage() {
     return videoSegments[activeVideoIndex] ?? null;
   }, [activeVideoIndex, videoSegments]);
   const activeVideoFps = activeVideoSegment?.fps ?? fps;
-  const currentTime = getSegmentTimeForFrame(currentSegmentFrame, activeVideoFps);
   const videoUrl = useMemo(() => {
     if (!activeVideoSegment?.url) return null;
     return buildArtifactUrl(activeVideoSegment.url);
