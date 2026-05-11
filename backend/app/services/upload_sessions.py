@@ -467,7 +467,7 @@ class UploadSessionService:
         right_end = UploadSessionService._segment_end_frame(right)
         if left_end is None or right_end is None:
             return left_start == right_start
-        return not (right_end < left_start or left_end < right_start)
+        return not (right_end <= left_start or left_end <= right_start)
 
     @staticmethod
     def _canonical_value(row: dict[str, str], field: str) -> str:
