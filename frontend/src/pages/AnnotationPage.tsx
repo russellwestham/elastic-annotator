@@ -1523,17 +1523,20 @@ export function AnnotationPage() {
                 }}
               />
               <div className="video-segment-editor">
-                <label className="video-segment-upload">
+                <label className={`video-segment-upload${uploadingSegment ? " is-disabled" : ""}`}>
                   <span className="video-segment-upload-label">Replace or add video</span>
-                  <input
-                    key={segmentUploadFile?.name ?? "video-segment-empty"}
-                    type="file"
-                    accept=".mp4,.mov,.m4v,.webm,video/*"
-                    onChange={(e) => setSegmentUploadFile(e.target.files?.[0] ?? null)}
-                    disabled={uploadingSegment}
-                  />
+                  <span className="video-segment-upload-control">
+                    <span className="video-segment-upload-button">Choose Video File</span>
+                    <input
+                      key={segmentUploadFile?.name ?? "video-segment-empty"}
+                      type="file"
+                      accept=".mp4,.mov,.m4v,.webm,video/*"
+                      onChange={(e) => setSegmentUploadFile(e.target.files?.[0] ?? null)}
+                      disabled={uploadingSegment}
+                    />
+                  </span>
                   <span className="video-segment-upload-name">
-                    {segmentUploadFile?.name ?? "Choose video file"}
+                    {segmentUploadFile?.name ?? "No file selected"}
                   </span>
                 </label>
                 <label className="video-segment-start-field">

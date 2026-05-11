@@ -21,7 +21,7 @@ function formatDateTime(iso: string): string {
   if (Number.isNaN(dt.getTime())) {
     return iso;
   }
-  return dt.toLocaleString("ko-KR", { hour12: false });
+  return dt.toLocaleString("en-US", { hour12: false });
 }
 
 function formatDuration(seconds: number | null | undefined): string {
