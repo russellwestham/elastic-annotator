@@ -308,8 +308,9 @@ export function SessionCreatePage() {
   };
 
   const beginTitleEdit = (session: SessionStatus) => {
+    const titleLabel = getSessionTitle(session);
     setEditingTitleSessionId(session.session_id);
-    setEditingTitleValue(session.session_name?.trim() ?? "");
+    setEditingTitleValue(titleLabel);
     setError(null);
   };
 
@@ -641,7 +642,7 @@ export function SessionCreatePage() {
                             <input
                               value={editingTitleValue}
                               onChange={(e) => setEditingTitleValue(e.target.value)}
-                              placeholder={session.match_id}
+                              placeholder={titleLabel}
                               disabled={isSavingTitle || isDeleting}
                               onKeyDown={(event) => {
                                 if (event.key === "Enter") {
