@@ -556,12 +556,14 @@ export function AnnotationPage() {
       const filename = segment.original_filename?.trim() || `Segment ${idx + 1}`;
       const startLabel = segment.start_frame.toLocaleString("en-US");
       const endFrame = getSegmentEndFrame(segment);
+      const segmentFps = segment.fps || fps;
+      
       if (endFrame === null) {
         return `${filename} | Start ${startLabel}`;
       }
       const endLabel = endFrame.toLocaleString("en-US");
-      const startTs = formatSeconds(segment.start_frame / fps);
-      const endTs = formatSeconds(endFrame / fps);
+      const startTs = formatSeconds(segment.start_frame / segmentFps);
+      const endTs = formatSeconds(endFrame / segmentFps);
       return `${filename} | Frames ${startLabel} - ${endLabel} | Time ${startTs} - ${endTs}`;
     });
   }, [fps, videoSegments]);

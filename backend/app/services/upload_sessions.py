@@ -184,21 +184,29 @@ class UploadSessionService:
             return None
 
     @staticmethod
-    def _extract_frame_range_from_filename(filename: str | None) -> tuple[int, int] | None:
+    def _extract_frame_range_from_filename(filename: str | None, fps: float) -> tuple[int, int] | None:
         stem = Path(filename or "").stem
         match = VIDEO_FRAME_RANGE_PATTERN.search(stem) or re.search(r"(\d+)-(\d+)", stem)
         if not match:
             return None
 
-        start = int(match.group(1))
-        end = int(match.group(2))
-        if end <= start:
+        # 유저 요청에 따라 파일명의 숫자를 '초' 단위로 인식하여 프레임으로 변환
+        try:
+            start_sec = float(match.group(1))
+            end_sec = float(match.group(2))
+            
+            start_frame = int(round(start_sec * fps))
+            end_frame = int(round(end_sec * fps)) - 1
+            
+            if end_frame < start_frame:
+                return None
+            return start_frame, end_frame
+        except (ValueError, TypeError):
             return None
-        return start, end
 
     @staticmethod
-    def _extract_start_frame_from_filename(filename: str | None) -> int | None:
-        frame_range = UploadSessionService._extract_frame_range_from_filename(filename)
+    def _extract_start_frame_from_filename(filename: str | None, fps: float) -> int | None:
+        frame_range = UploadSessionService._extract_frame_range_from_filename(filename, fps)
         if frame_range is None:
             return None
         return frame_range[0]
@@ -227,7 +235,7 @@ class UploadSessionService:
         fps: float,
         video_duration_seconds: float | None,
     ) -> tuple[int, str, int | None]:
-        filename_start = self._extract_start_frame_from_filename(original_video_filename)
+        filename_start = self._extract_start_frame_from_filename(original_video_filename, fps)
         video_frame_count = (
             max(1, int(round(video_duration_seconds * fps)))
             if video_duration_seconds is not None and fps > 0
@@ -298,8 +306,8 @@ class UploadSessionService:
             return None
 
         original_filename = str(raw_segment.get("original_filename") or "").strip() or Path(url.split("?", 1)[0]).name
-        frame_range = self._extract_frame_range_from_filename(original_filename)
-        fps = self._parse_positive_float(raw_segment.get("fps")) or default_fps
+        fps = self._parse_positive_float(raw_segment.get("fps")) or default_fps or DEFAULT_FPS
+        frame_range = self._extract_frame_range_from_filename(original_filename, fps)
         raw_start_frame = raw_segment.get("start_frame")
         start_frame = self._parse_int(None if raw_start_frame is None else str(raw_start_frame))
         if start_frame is None and frame_range is not None:
@@ -353,7 +361,7 @@ class UploadSessionService:
             urls = self._unique_video_urls(metadata)
             for index, url in enumerate(urls):
                 filename = Path(url.split("?", 1)[0]).name
-                frame_range = self._extract_frame_range_from_filename(filename)
+                frame_range = self._extract_frame_range_from_filename(filename, default_fps or DEFAULT_FPS)
                 frame_count = None
                 duration_seconds = None
                 start_frame = None
@@ -647,7 +655,6 @@ class UploadSessionService:
             status="ready",
             progress="uploaded",
             event_count=len(events),
-            fps=fps,
             validation_warnings=warnings,
             **patch,
         )
