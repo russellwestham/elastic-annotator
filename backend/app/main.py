@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,12 +15,27 @@ settings = get_settings()
 app = FastAPI(title=settings.app_name)
 
 
-class SPAStaticFiles(StaticFiles):
+def _has_hidden_path_part(path: str) -> bool:
+    return any(
+        part not in {"", ".", ".."} and part.startswith(".")
+        for part in PurePosixPath(path).parts
+    )
+
+
+class SafeStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):  # type: ignore[override]
+        # Never expose dotfiles such as .env or .bash_history even if they exist on disk.
+        if _has_hidden_path_part(path):
+            raise StarletteHTTPException(status_code=404)
+        return await super().get_response(path, scope)
+
+
+class SPAStaticFiles(SafeStaticFiles):
     async def get_response(self, path: str, scope):  # type: ignore[override]
         try:
             return await super().get_response(path, scope)
         except StarletteHTTPException as exc:
-            if exc.status_code == 404 and not Path(path).suffix:
+            if exc.status_code == 404 and not Path(path).suffix and not _has_hidden_path_part(path):
                 return await super().get_response("index.html", scope)
             raise
 
@@ -35,7 +50,7 @@ app.add_middleware(
 app.include_router(router)
 
 storage_root = Path(__file__).resolve().parents[1] / "storage"
-app.mount("/artifacts", StaticFiles(directory=str(storage_root)), name="artifacts")
+app.mount("/artifacts", SafeStaticFiles(directory=str(storage_root)), name="artifacts")
 
 # Production convenience: when frontend build output exists,
 # serve it from the same FastAPI origin.
