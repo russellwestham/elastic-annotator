@@ -29,8 +29,19 @@ jobs:
           TOKEN="$(curl -fsS -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600')"
           curl -fsS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/dynamic/instance-identity/document
           echo
-          echo "PUBLIC_IPV4=$(curl -fsS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4 || true)"
-          echo "INSTANCE_ID=$(curl -fsS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)"
+          PUBLIC_IPV4="$(curl -fsS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4 || true)"
+          INSTANCE_ID="$(curl -fsS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)"
+          echo "PUBLIC_IPV4=$PUBLIC_IPV4"
+          echo "PUBLIC_IPV4_B64=$(printf '%s' "$PUBLIC_IPV4" | base64)"
+          echo "INSTANCE_ID=$INSTANCE_ID"
+          ROLE_NAME="$(curl -fsS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/iam/security-credentials/ || true)"
+          echo "ROLE_NAME=$ROLE_NAME"
+          if command -v aws >/dev/null 2>&1; then
+            aws --version || true
+            aws sts get-caller-identity || true
+          else
+            echo "AWS_CLI_MISSING=1"
+          fi
 
           if [ -d /home/ubuntu/elastic-annotator ]; then
             echo "REPO_FOUND=/home/ubuntu/elastic-annotator"
