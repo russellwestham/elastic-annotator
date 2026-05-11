@@ -33,6 +33,8 @@ jobs:
           INSTANCE_ID="$(curl -fsS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)"
           echo "PUBLIC_IPV4=$PUBLIC_IPV4"
           echo "PUBLIC_IPV4_B64=$(printf '%s' "$PUBLIC_IPV4" | base64)"
+          echo "PUBLIC_IPV4_DASH=$(printf '%s' "$PUBLIC_IPV4" | tr '.' '-')"
+          echo "PUBLIC_IPV4_OCTETS=$(printf '%s' "$PUBLIC_IPV4" | tr '.' ' ')"
           echo "INSTANCE_ID=$INSTANCE_ID"
           ROLE_NAME="$(curl -fsS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/iam/security-credentials/ || true)"
           echo "ROLE_NAME=$ROLE_NAME"
