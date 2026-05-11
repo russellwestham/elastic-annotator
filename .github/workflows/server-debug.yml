@@ -1,0 +1,51 @@
+name: Server Debug
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect remote server via SSH
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          key_path=~/.ssh/ec2_debug_key
+          printf '%s\n' "$EC2_SSH_KEY" > "$key_path"
+          chmod 600 "$key_path"
+
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=20 -i "$key_path" "$EC2_USER@$EC2_HOST" <<'EOF'
+          set -euxo pipefail
+          echo "REMOTE_HOSTNAME=$(hostname)"
+          echo "REMOTE_USER=$(whoami)"
+          echo "REMOTE_DATE=$(date -Is)"
+          echo "REMOTE_HOME=$HOME"
+
+          TOKEN="$(curl -fsS -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600')"
+          curl -fsS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/dynamic/instance-identity/document
+          echo
+          echo "PUBLIC_IPV4=$(curl -fsS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4 || true)"
+          echo "INSTANCE_ID=$(curl -fsS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)"
+
+          if [ -d /home/ubuntu/elastic-annotator ]; then
+            echo "REPO_FOUND=/home/ubuntu/elastic-annotator"
+            cd /home/ubuntu/elastic-annotator
+            pwd
+            git rev-parse --short HEAD || true
+            git status --short || true
+            ls -la | head -n 80
+          else
+            echo "REPO_MISSING=/home/ubuntu/elastic-annotator"
+          fi
+
+          systemctl is-active elastic-annotator || true
+          systemctl status elastic-annotator --no-pager -n 80 || true
+          journalctl -u elastic-annotator --since "24 hours ago" --no-pager -n 200 || true
+          curl -fsS http://127.0.0.1:8000/api/health || true
+          echo
+          EOF
