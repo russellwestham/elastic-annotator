@@ -5,10 +5,12 @@ import {
   buildSessionOpenUrl,
   createSession,
   createUploadSession,
+  deleteSession,
   fetchDefaultDatasetRoot,
   fetchMatches,
   fetchSession,
   fetchSessions,
+  updateSessionMetadata,
 } from "../api";
 import type { MatchSummary, SessionStatus } from "../types";
 
@@ -22,8 +24,26 @@ function formatDateTime(iso: string): string {
   return dt.toLocaleString("ko-KR", { hour12: false });
 }
 
-function getTrackLabel(session: SessionStatus): string {
-  return session.session_mode === "upload_csv" ? "My Uploaded Data" : "Public Dataset";
+function formatDuration(seconds: number | null | undefined): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) {
+    return "-";
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remain = Math.round(seconds % 60);
+  return `${minutes}:${String(remain).padStart(2, "0")}`;
+}
+
+function formatFrame(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  return Math.round(value).toLocaleString("en-US");
+}
+
+function getFrameSourceLabel(source: string | null | undefined): string {
+  if (source === "filename") return "filename";
+  if (source === "duration") return "video length";
+  return "fallback";
 }
 
 function getPersistLabel(session: SessionStatus): string {
@@ -31,6 +51,15 @@ function getPersistLabel(session: SessionStatus): string {
     return "-";
   }
   return session.persist ? "Saved" : "Temporary";
+}
+
+function getSessionTitle(session: SessionStatus): string {
+  return (
+    session.session_name?.trim() ||
+    session.original_video_filename?.trim() ||
+    session.match_id?.trim() ||
+    session.session_id
+  );
 }
 
 export function SessionCreatePage() {
@@ -46,6 +75,7 @@ export function SessionCreatePage() {
 
   const [uploadVideoFile, setUploadVideoFile] = useState<File | null>(null);
   const [uploadCsvFile, setUploadCsvFile] = useState<File | null>(null);
+  const [uploadStartFrame, setUploadStartFrame] = useState("");
   const [persistUpload, setPersistUpload] = useState(true);
   const [dragTarget, setDragTarget] = useState<"video" | "csv" | null>(null);
 
@@ -57,6 +87,13 @@ export function SessionCreatePage() {
   const [recentSessions, setRecentSessions] = useState<SessionStatus[]>([]);
   const [loadingRecentSessions, setLoadingRecentSessions] = useState(false);
   const [openingLatest, setOpeningLatest] = useState(false);
+  const [editingTitleSessionId, setEditingTitleSessionId] = useState<string | null>(null);
+  const [editingTitleValue, setEditingTitleValue] = useState("");
+  const [savingTitleSessionId, setSavingTitleSessionId] = useState<string | null>(null);
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [pendingAlignmentSession, setPendingAlignmentSession] = useState<SessionStatus | null>(null);
+  const [alignmentStartFrame, setAlignmentStartFrame] = useState("");
+  const [savingAlignment, setSavingAlignment] = useState(false);
 
   const loadMatches = async (root?: string): Promise<MatchSummary[]> => {
     setError(null);
@@ -170,6 +207,17 @@ export function SessionCreatePage() {
       return;
     }
 
+    const normalizedStartFrame = uploadStartFrame.trim();
+    let requestedStartFrame: number | undefined;
+    if (normalizedStartFrame) {
+      const parsedStartFrame = Number(normalizedStartFrame);
+      if (!Number.isFinite(parsedStartFrame) || parsedStartFrame < 0) {
+        setError("Video start frame must be a non-negative number.");
+        return;
+      }
+      requestedStartFrame = Math.round(parsedStartFrame);
+    }
+
     setCreating(true);
     setError(null);
     try {
@@ -177,10 +225,16 @@ export function SessionCreatePage() {
         videoFile: uploadVideoFile,
         csvFile: uploadCsvFile,
         persist: persistUpload,
+        videoStartFrame: requestedStartFrame,
       });
       setStatus(created);
       await loadRecentSessions();
-      navigate(buildSessionOpenUrl(created));
+      if (created.video_start_frame_confirmed || requestedStartFrame !== undefined) {
+        navigate(buildSessionOpenUrl(created));
+        return;
+      }
+      setPendingAlignmentSession(created);
+      setAlignmentStartFrame(String(created.video_start_frame ?? 0));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -202,6 +256,7 @@ export function SessionCreatePage() {
         return;
       }
       setUploadVideoFile(file);
+      setPendingAlignmentSession(null);
       return;
     }
 
@@ -210,6 +265,7 @@ export function SessionCreatePage() {
       return;
     }
     setUploadCsvFile(file);
+    setPendingAlignmentSession(null);
   };
 
   const handleUploadDragOver = (target: "video" | "csv") => (event: DragEvent<HTMLElement>) => {
@@ -248,6 +304,90 @@ export function SessionCreatePage() {
       setError((err as Error).message);
     } finally {
       setOpeningLatest(false);
+    }
+  };
+
+  const beginTitleEdit = (session: SessionStatus) => {
+    setEditingTitleSessionId(session.session_id);
+    setEditingTitleValue(session.session_name?.trim() ?? "");
+    setError(null);
+  };
+
+  const cancelTitleEdit = () => {
+    setEditingTitleSessionId(null);
+    setEditingTitleValue("");
+  };
+
+  const saveTitleEdit = async (session: SessionStatus) => {
+    const sessionId = session.session_id;
+    setSavingTitleSessionId(sessionId);
+    setError(null);
+    try {
+      const updated = await updateSessionMetadata(sessionId, { title: editingTitleValue });
+      setRecentSessions((prev) => prev.map((item) => (item.session_id === sessionId ? updated : item)));
+      setStatus((prev) => (prev?.session_id === sessionId ? updated : prev));
+      cancelTitleEdit();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSavingTitleSessionId(null);
+    }
+  };
+
+  const handleDeleteSession = async (session: SessionStatus) => {
+    const label = getSessionTitle(session);
+    const confirmed = window.confirm(
+      `Delete session "${label}" (${session.session_id})?\n\nThis action cannot be undone.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingSessionId(session.session_id);
+    setError(null);
+    try {
+      await deleteSession(session.session_id);
+      setRecentSessions((prev) => prev.filter((item) => item.session_id !== session.session_id));
+      setStatus((prev) => (prev?.session_id === session.session_id ? null : prev));
+      if (editingTitleSessionId === session.session_id) {
+        cancelTitleEdit();
+      }
+      if (pendingAlignmentSession?.session_id === session.session_id) {
+        setPendingAlignmentSession(null);
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setDeletingSessionId(null);
+    }
+  };
+
+  const handleApplyAlignment = async () => {
+    if (!pendingAlignmentSession) {
+      return;
+    }
+
+    const parsed = Number(alignmentStartFrame);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      setError("Video start frame must be a non-negative number.");
+      return;
+    }
+
+    const videoStartFrame = Math.round(parsed);
+    setSavingAlignment(true);
+    setError(null);
+    try {
+      const updated = await updateSessionMetadata(pendingAlignmentSession.session_id, {
+        video_start_frame: videoStartFrame,
+      });
+      setPendingAlignmentSession(null);
+      setStatus(updated);
+      setRecentSessions((prev) => prev.map((item) => (item.session_id === updated.session_id ? updated : item)));
+      navigate(buildSessionOpenUrl(updated));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSavingAlignment(false);
     }
   };
 
@@ -401,6 +541,16 @@ export function SessionCreatePage() {
               <button type="button" className="primary" onClick={handleCreateUpload} disabled={creating}>
                 {creating ? "Uploading..." : "Open in Editor"}
               </button>
+              <label className="upload-start-frame-field">
+                Start frame
+                <input
+                  type="number"
+                  min={0}
+                  value={uploadStartFrame}
+                  onChange={(e) => setUploadStartFrame(e.target.value)}
+                  placeholder="Optional"
+                />
+              </label>
               <label className="check-row compact-check">
                 <input
                   type="checkbox"
@@ -410,6 +560,46 @@ export function SessionCreatePage() {
                 Keep on server
               </label>
             </div>
+
+            {pendingAlignmentSession && (
+              <div className="alignment-panel">
+                <div className="alignment-panel-main">
+                  <div>
+                    <h3>Frame Alignment</h3>
+                    <p className="muted compact-note">
+                      Suggested from {getFrameSourceLabel(pendingAlignmentSession.video_start_frame_source)}
+                    </p>
+                  </div>
+                  <label>
+                    Video start frame
+                    <input
+                      type="number"
+                      min={0}
+                      value={alignmentStartFrame}
+                      onChange={(event) => setAlignmentStartFrame(event.target.value)}
+                      disabled={savingAlignment}
+                    />
+                  </label>
+                </div>
+                <div className="alignment-meta">
+                  <span>{pendingAlignmentSession.original_video_filename ?? "uploaded video"}</span>
+                  <span>{pendingAlignmentSession.fps ?? 25} fps</span>
+                  <span>{formatDuration(pendingAlignmentSession.video_duration_seconds)}</span>
+                  <span>{formatFrame(pendingAlignmentSession.video_frame_count)} frames</span>
+                </div>
+                <div className="create-actions upload-actions">
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={() => void handleApplyAlignment()}
+                    disabled={savingAlignment}
+                  >
+                    {savingAlignment ? "Applying..." : "Apply & Open"}
+                  </button>
+                  <span className="muted compact-note">CSV frames stay unchanged.</span>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -427,23 +617,70 @@ export function SessionCreatePage() {
               <thead>
                 <tr>
                   <th>Updated</th>
-                  <th>Track</th>
-                  <th>Label</th>
+                  <th>Title</th>
                   <th>Session ID</th>
                   <th>Status</th>
                   <th>Persist</th>
                   <th>Open</th>
+                  <th>Delete</th>
                 </tr>
               </thead>
               <tbody>
                 {recentSessions.map((session) => {
                   const openUrl = `/annotate/${encodeURIComponent(session.session_id)}`;
-                  const label = session.session_name?.trim() || session.match_id;
+                  const isEditingTitle = editingTitleSessionId === session.session_id;
+                  const isSavingTitle = savingTitleSessionId === session.session_id;
+                  const isDeleting = deletingSessionId === session.session_id;
+                  const titleLabel = getSessionTitle(session);
                   return (
                     <tr key={session.session_id}>
                       <td>{formatDateTime(session.updated_at)}</td>
-                      <td>{getTrackLabel(session)}</td>
-                      <td className="event-cell-primary">{label}</td>
+                      <td className="session-title-cell">
+                        {isEditingTitle ? (
+                          <div className="session-title-editor">
+                            <input
+                              value={editingTitleValue}
+                              onChange={(e) => setEditingTitleValue(e.target.value)}
+                              placeholder={session.match_id}
+                              disabled={isSavingTitle || isDeleting}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  void saveTitleEdit(session);
+                                }
+                                if (event.key === "Escape") {
+                                  event.preventDefault();
+                                  cancelTitleEdit();
+                                }
+                              }}
+                            />
+                            <div className="session-title-actions">
+                              <button
+                                type="button"
+                                onClick={() => void saveTitleEdit(session)}
+                                disabled={isSavingTitle || isDeleting}
+                              >
+                                {isSavingTitle ? "Saving..." : "Save"}
+                              </button>
+                              <button type="button" onClick={cancelTitleEdit} disabled={isSavingTitle || isDeleting}>
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="session-title-display">
+                            <span className="event-cell-primary">{titleLabel}</span>
+                            <button
+                              type="button"
+                              className="session-title-edit-button"
+                              onClick={() => beginTitleEdit(session)}
+                              disabled={isDeleting}
+                            >
+                              Edit
+                            </button>
+                          </div>
+                        )}
+                      </td>
                       <td>{session.session_id}</td>
                       <td title={session.progress ?? undefined}>
                         {session.status}
@@ -451,9 +688,20 @@ export function SessionCreatePage() {
                       </td>
                       <td>{getPersistLabel(session)}</td>
                       <td>
-                        <a href={openUrl} target="_blank" rel="noreferrer">
+                        <a href={openUrl} target="_blank" rel="noreferrer" aria-disabled={isDeleting}>
                           Open
                         </a>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="danger session-delete-button"
+                          onClick={() => void handleDeleteSession(session)}
+                          disabled={isDeleting || session.status === "processing"}
+                          title={session.status === "processing" ? "Processing sessions cannot be deleted." : undefined}
+                        >
+                          {isDeleting ? "Deleting..." : "Delete"}
+                        </button>
                       </td>
                     </tr>
                   );

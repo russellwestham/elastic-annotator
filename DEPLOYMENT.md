@@ -64,7 +64,11 @@ Template file:
 
 - `deploy/systemd/elastic-annotator.service`
 
-After editing `User`, `Group`, `WorkingDirectory`, run:
+The checked-in template already matches the EC2 deploy path:
+
+- `/home/ubuntu/elastic-annotator`
+
+After editing `User` and `Group` if needed, run:
 
 ```bash
 sudo cp deploy/systemd/elastic-annotator.service /etc/systemd/system/
@@ -113,9 +117,14 @@ sudo systemctl restart elastic-annotator
 
 ### Deployment Sync Rule (Required)
 
-- Always deploy through this order: `local edit -> push to main -> deploy`.
+- Always deploy through this order: `local edit -> local verify -> commit -> push to main -> deploy`.
 - Do not edit code directly on the EC2 server.
 - `deploy/ec2/deploy_on_server.sh` blocks deploy when server git state is dirty or diverged from fast-forward pull.
+- GitHub Actions deploys by SSH and runs `/home/ubuntu/elastic-annotator/deploy/ec2/deploy_on_server.sh`.
+- Successful deployment means:
+  - the Actions job succeeds
+  - `systemctl restart elastic-annotator` succeeds on the server
+  - `curl http://127.0.0.1:8000/api/health` returns `200`
 
 ## 7) Backup minimum set
 

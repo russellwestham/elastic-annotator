@@ -21,6 +21,8 @@ from backend.app.schemas.api import (
     EventSaveResponse,
     MatchSummary,
     SessionCreateRequest,
+    SessionDeleteResponse,
+    SessionMetadataUpdateRequest,
     SessionStatusResponse,
 )
 from backend.app.services.elastic_pipeline import ElasticPipelineService
@@ -88,6 +90,13 @@ def _to_status_response(metadata: dict) -> SessionStatusResponse:
         fps=metadata.get("fps"),
         video_url=metadata.get("video_url"),
         video_urls=metadata.get("video_urls"),
+        video_start_frame=metadata.get("video_start_frame"),
+        original_video_filename=metadata.get("original_video_filename"),
+        video_start_frame_source=metadata.get("video_start_frame_source"),
+        video_start_frame_confirmed=bool(metadata.get("video_start_frame_confirmed", False)),
+        video_duration_seconds=metadata.get("video_duration_seconds"),
+        video_frame_count=metadata.get("video_frame_count"),
+        video_segments=metadata.get("video_segments") or [],
     )
 
 
@@ -96,28 +105,21 @@ def _session_has_video_artifact(metadata: dict) -> bool:
     if not session_id:
         return False
 
-    video_urls = metadata.get("video_urls") or []
-    video_url = metadata.get("video_url")
-    if isinstance(video_url, str) and video_url and video_url not in video_urls:
-        video_urls = [video_url, *video_urls]
-
-    if not video_urls:
+    normalized_segments = metadata.get("video_segments") or upload_sessions.normalize_video_segments(session_id, metadata)
+    if not normalized_segments:
         return False
 
     has_any = False
-    prefix = f"/artifacts/sessions/{session_id}/"
-    session_dir = store.session_dir(session_id)
-    for item in video_urls:
-        url = str(item or "")
+    for segment in normalized_segments:
+        url = str(segment.get("url") or "")
         if not url:
             continue
         if url.startswith("http://") or url.startswith("https://"):
             has_any = True
             continue
-        if url.startswith(prefix):
-            filename = url.split("/")[-1]
-            if filename and (session_dir / filename).exists():
-                has_any = True
+        local_path = upload_sessions._artifact_path_for_url(session_id, url)
+        if local_path is not None and local_path.exists():
+            has_any = True
     return has_any
 
 
@@ -180,8 +182,10 @@ def _ensure_invalid_ready_state_recovery(metadata: dict) -> dict:
 
 
 def _normalize_session_integrity(metadata: dict) -> dict:
-    normalized = _ensure_ready_session_integrity(metadata)
+    normalized = upload_sessions.normalize_video_metadata(metadata)
+    normalized = _ensure_ready_session_integrity(normalized)
     normalized = _ensure_invalid_ready_state_recovery(normalized)
+    normalized = upload_sessions.normalize_video_metadata(normalized)
     return normalized
 
 
@@ -256,13 +260,16 @@ def create_upload_session(
     csv_file: UploadFile = File(...),
     persist: bool = Form(default=False),
     session_name: str | None = Form(default=None),
+    video_start_frame: int | None = Form(default=None),
 ) -> SessionStatusResponse:
     metadata = upload_sessions.create_upload_session(
         video_file=video_file,
         csv_file=csv_file,
         persist=persist,
         session_name=session_name,
+        video_start_frame=video_start_frame,
     )
+    metadata = _normalize_session_integrity(metadata)
     return _to_status_response(metadata)
 
 
@@ -274,6 +281,103 @@ def get_session(session_id: str) -> SessionStatusResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     metadata = _normalize_session_integrity(metadata)
     return _to_status_response(metadata)
+
+
+@router.patch("/sessions/{session_id}", response_model=SessionStatusResponse)
+def update_session_metadata(
+    session_id: str,
+    request: SessionMetadataUpdateRequest,
+) -> SessionStatusResponse:
+    try:
+        metadata = store.load_metadata(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    metadata = upload_sessions.normalize_video_metadata(metadata)
+    update_kwargs: dict[str, object] = {}
+
+    if "video_start_frame" in request.model_fields_set:
+        segments = upload_sessions.normalize_video_segments(session_id, metadata)
+        if len(segments) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail="Start frame editing is only available while the session has a single video segment.",
+            )
+
+        if segments and request.video_start_frame is not None:
+            primary_segment = dict(segments[0])
+            primary_segment["start_frame"] = request.video_start_frame
+            update_kwargs.update(
+                upload_sessions.build_video_metadata_patch(
+                    [primary_segment],
+                    metadata,
+                    primary_source="manual",
+                    primary_confirmed=True,
+                )
+            )
+        else:
+            update_kwargs["video_start_frame"] = request.video_start_frame
+            update_kwargs["video_start_frame_confirmed"] = request.video_start_frame is not None
+
+    if "title" in request.model_fields_set:
+        normalized_title = (request.title or "").strip()
+        update_kwargs["session_name"] = normalized_title or None
+
+    if update_kwargs:
+        metadata = store.update_metadata(session_id, **update_kwargs)
+
+    metadata = _normalize_session_integrity(metadata)
+    return _to_status_response(metadata)
+
+
+@router.post("/sessions/{session_id}/videos", response_model=SessionStatusResponse)
+def add_session_video(
+    session_id: str,
+    video_file: UploadFile = File(...),
+    start_frame: int = Form(...),
+) -> SessionStatusResponse:
+    if start_frame < 0:
+        raise HTTPException(status_code=400, detail="start_frame must be non-negative")
+
+    try:
+        metadata = store.load_metadata(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if metadata.get("status") == "processing":
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot replace videos while the session is still processing.",
+        )
+
+    updated = upload_sessions.add_video_segment(
+        session_id=session_id,
+        metadata=metadata,
+        video_file=video_file,
+        start_frame=start_frame,
+    )
+    updated = _normalize_session_integrity(updated)
+    return _to_status_response(updated)
+
+
+@router.delete("/sessions/{session_id}", response_model=SessionDeleteResponse)
+def delete_session(session_id: str) -> SessionDeleteResponse:
+    try:
+        metadata = store.load_metadata(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if metadata.get("status") == "processing":
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete a processing session. Wait for completion or stop the worker first.",
+        )
+
+    deleted = store.delete_session(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Unknown session: {session_id}")
+
+    return SessionDeleteResponse(ok=True, session_id=session_id)
 
 
 @router.get("/sessions", response_model=list[SessionStatusResponse])

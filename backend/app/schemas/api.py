@@ -55,6 +55,17 @@ class EventRow(BaseModel):
     note: str = ""
 
 
+class VideoSegmentResponse(BaseModel):
+    id: str
+    url: str
+    original_filename: str | None = None
+    start_frame: int = Field(ge=0)
+    frame_count: int | None = Field(default=None, ge=1)
+    duration_seconds: float | None = Field(default=None, ge=0)
+    fps: float | None = Field(default=None, gt=0)
+    created_at: datetime
+
+
 class SessionStatusResponse(BaseModel):
     session_id: str
     annotator_name: str
@@ -72,6 +83,23 @@ class SessionStatusResponse(BaseModel):
     fps: float | None = None
     video_url: str | None = None
     video_urls: list[str] | None = None
+    video_start_frame: int | None = None
+    original_video_filename: str | None = None
+    video_start_frame_source: str | None = None
+    video_start_frame_confirmed: bool = False
+    video_duration_seconds: float | None = None
+    video_frame_count: int | None = None
+    video_segments: list[VideoSegmentResponse] = Field(default_factory=list)
+
+
+class SessionMetadataUpdateRequest(BaseModel):
+    video_start_frame: int | None = Field(default=None, ge=0)
+    title: str | None = Field(default=None, max_length=200)
+
+
+class SessionDeleteResponse(BaseModel):
+    ok: bool
+    session_id: str
 
 
 class EventListResponse(BaseModel):

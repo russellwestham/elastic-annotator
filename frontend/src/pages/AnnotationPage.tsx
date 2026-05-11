@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import {
+  addSessionVideo,
   buildArtifactUrl,
   buildSessionCsvExportUrl,
   fetchEvents,
@@ -12,7 +13,7 @@ import {
   saveEvents,
 } from "../api";
 import { EventTable } from "../components/EventTable";
-import type { ErrorType, EventRow, SessionStatus } from "../types";
+import type { ErrorType, EventRow, SessionStatus, VideoSegment } from "../types";
 
 const ERROR_TYPES: Array<"" | ErrorType> = [
   "",
@@ -26,9 +27,21 @@ const ERROR_TYPES: Array<"" | ErrorType> = [
   "missing",
 ];
 const KEYBOARD_SEEK_SECONDS = 0.2;
+const FRAME_TIME_EPSILON = 1e-6;
 const TEAM_PLAYER_ID_PATTERN = /^(home|away)_\d+$/;
 const TEAM_PLAYER_ID_DETAIL_PATTERN = /^(home|away)_(\d+)$/;
 const WARNING_FRAME_PATTERN = /\bframe_id=(\d+)\b/;
+
+type VideoFrameCallbackMetadata = {
+  mediaTime: number;
+};
+
+type FrameCallbackVideoElement = HTMLVideoElement & {
+  requestVideoFrameCallback?: (
+    callback: (now: number, metadata: VideoFrameCallbackMetadata) => void,
+  ) => number;
+  cancelVideoFrameCallback?: (handle: number) => void;
+};
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -47,6 +60,31 @@ function formatSeconds(seconds: number): string {
   const minutes = Math.floor(safe / 60);
   const remain = safe % 60;
   return `${String(minutes).padStart(2, "0")}:${remain.toFixed(2).padStart(5, "0")}`;
+}
+
+function getSegmentFrameFromTime(seconds: number, fps: number): number {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(seconds * fps + FRAME_TIME_EPSILON));
+}
+
+function getSegmentTimeForFrame(segmentFrame: number, fps: number): number {
+  return Math.max(0, segmentFrame) / fps;
+}
+
+function getSeekTimeForSegmentFrame(segmentFrame: number, fps: number, duration: number): number {
+  const centeredTime = (Math.max(0, segmentFrame) + 0.5) / fps;
+  if (!Number.isFinite(duration) || duration <= 0) {
+    return centeredTime;
+  }
+
+  const maxTime = Math.max(0, duration - Math.min(0.001, 0.25 / fps));
+  return Math.min(centeredTime, maxTime);
+}
+
+function supportsVideoFrameCallback(videoEl: HTMLVideoElement): videoEl is FrameCallbackVideoElement {
+  return typeof (videoEl as FrameCallbackVideoElement).requestVideoFrameCallback === "function";
 }
 
 function parseTimestampToSeconds(value: string | null | undefined): number | null {
@@ -112,16 +150,42 @@ function findInsertIndexByFrame(rows: EventRow[], currentFrame: number): number 
   return rows.length;
 }
 
-function parseSegmentFrameRange(path: string | null): { start: number; end: number } | null {
-  if (!path) return null;
-  const match = path.match(/_(\d+)-(\d+)\.mp4(?:$|\?)/);
-  if (!match) return null;
-  const start = Number(match[1]);
-  const end = Number(match[2]);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+function getSegmentEndFrame(segment: VideoSegment | null | undefined): number | null {
+  if (!segment || typeof segment.start_frame !== "number" || typeof segment.frame_count !== "number") {
     return null;
   }
-  return { start, end };
+  if (!Number.isFinite(segment.start_frame) || !Number.isFinite(segment.frame_count) || segment.frame_count <= 0) {
+    return null;
+  }
+  return segment.start_frame + segment.frame_count - 1;
+}
+
+function buildLegacyVideoSegments(session: SessionStatus | null): VideoSegment[] {
+  if (!session) return [];
+
+  const urls = [
+    ...(session.video_url ? [session.video_url] : []),
+    ...(session.video_urls ?? []),
+  ].filter((value, index, array): value is string => !!value && array.indexOf(value) === index);
+
+  return urls.map((url, index) => {
+    const match = url.match(/_(\d+)-(\d+)\.[^.]+(?:$|\?)/);
+    const startFrame = match ? Number(match[1]) : (index === 0 ? session.video_start_frame ?? 0 : 0);
+    const endFrame = match ? Number(match[2]) : null;
+    const frameCount = endFrame !== null && Number.isFinite(endFrame) && Number.isFinite(startFrame)
+      ? endFrame - startFrame + 1
+      : session.video_frame_count ?? null;
+    return {
+      id: `legacy-${index + 1}`,
+      url,
+      original_filename: index === 0 ? session.original_video_filename ?? null : null,
+      start_frame: Number.isFinite(startFrame) ? startFrame : 0,
+      frame_count: frameCount,
+      duration_seconds: index === 0 ? session.video_duration_seconds ?? null : null,
+      fps: session.fps ?? null,
+      created_at: session.updated_at,
+    };
+  });
 }
 
 function isSameEventRow(a: EventRow | null, b: EventRow | null): boolean {
@@ -363,9 +427,10 @@ export function AnnotationPage() {
   const [events, setEvents] = useState<EventRow[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [pairSelection, setPairSelection] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [currentTime, setCurrentTime] = useState(0);
+  const [currentSegmentFrame, setCurrentSegmentFrame] = useState(0);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveMessage, setSaveMessage] = useState("");
   const [resettingTimeline, setResettingTimeline] = useState(false);
@@ -376,6 +441,9 @@ export function AnnotationPage() {
   const [spadlTypes, setSpadlTypes] = useState<string[]>([]);
   const [pendingSeekFrame, setPendingSeekFrame] = useState<number | null>(null);
   const [draftRow, setDraftRow] = useState<EventRow | null>(null);
+  const [segmentUploadFile, setSegmentUploadFile] = useState<File | null>(null);
+  const [segmentUploadStartFrame, setSegmentUploadStartFrame] = useState("");
+  const [uploadingSegment, setUploadingSegment] = useState(false);
 
   const selectedRow = events[selectedIndex] ?? null;
   const fps = session?.fps ?? 25;
@@ -461,49 +529,42 @@ export function AnnotationPage() {
     return median(Array.from(periodTimestampOffsets.values()));
   }, [periodTimestampOffsets]);
 
-  const videoCandidates = useMemo(() => {
-    if (!session) return [] as string[];
-    if (session.video_urls && session.video_urls.length > 0) {
-      return session.video_urls;
+  const videoSegments = useMemo(() => {
+    if (!session) return [] as VideoSegment[];
+    if (session.video_segments && session.video_segments.length > 0) {
+      return session.video_segments;
     }
-    if (session.video_url) {
-      return [session.video_url];
-    }
-    return [] as string[];
+    return buildLegacyVideoSegments(session);
   }, [session]);
-
+  const activeVideoIndex = useMemo(() => {
+    if (videoSegments.length === 0) {
+      return 0;
+    }
+    return Math.min(Math.max(selectedVideoIndex, 0), videoSegments.length - 1);
+  }, [selectedVideoIndex, videoSegments]);
+  const activeVideoSegment = useMemo(() => {
+    return videoSegments[activeVideoIndex] ?? null;
+  }, [activeVideoIndex, videoSegments]);
+  const activeVideoFps = activeVideoSegment?.fps ?? fps;
+  const currentTime = getSegmentTimeForFrame(currentSegmentFrame, activeVideoFps);
   const videoUrl = useMemo(() => {
-    if (videoCandidates.length === 0) return null;
-    const safeIndex = Math.min(Math.max(selectedVideoIndex, 0), videoCandidates.length - 1);
-    return buildArtifactUrl(videoCandidates[safeIndex]);
-  }, [selectedVideoIndex, videoCandidates]);
-
-  const segmentRanges = useMemo(() => {
-    return videoCandidates.map((path) => parseSegmentFrameRange(path));
-  }, [videoCandidates]);
-  const hasSegmentRanges = useMemo(
-    () => segmentRanges.some((range) => range !== null),
-    [segmentRanges],
-  );
+    if (!activeVideoSegment?.url) return null;
+    return buildArtifactUrl(activeVideoSegment.url);
+  }, [activeVideoSegment]);
   const segmentOptionLabels = useMemo(() => {
-    return videoCandidates.map((_, idx) => {
-      const range = segmentRanges[idx];
-      if (!range) {
-        return `Segment ${idx + 1}`;
+    return videoSegments.map((segment, idx) => {
+      const filename = segment.original_filename?.trim() || `Segment ${idx + 1}`;
+      const startLabel = segment.start_frame.toLocaleString("en-US");
+      const endFrame = getSegmentEndFrame(segment);
+      if (endFrame === null) {
+        return `${filename} | Start ${startLabel}`;
       }
-      const startTs = formatSeconds(range.start / fps);
-      const endTs = formatSeconds(range.end / fps);
-      const startFrame = range.start.toLocaleString("en-US");
-      const endFrame = range.end.toLocaleString("en-US");
-      return `Segment ${idx + 1} | Time ${startTs} - ${endTs} | Frames ${startFrame} - ${endFrame}`;
+      const endLabel = endFrame.toLocaleString("en-US");
+      const startTs = formatSeconds(segment.start_frame / fps);
+      const endTs = formatSeconds(endFrame / fps);
+      return `${filename} | Frames ${startLabel} - ${endLabel} | Time ${startTs} - ${endTs}`;
     });
-  }, [fps, segmentRanges, videoCandidates]);
-
-  const segmentStartFrame = useMemo(() => {
-    if (!hasSegmentRanges) return 0;
-    const safeIndex = Math.min(Math.max(selectedVideoIndex, 0), segmentRanges.length - 1);
-    return segmentRanges[safeIndex]?.start ?? 0;
-  }, [hasSegmentRanges, selectedVideoIndex, segmentRanges]);
+  }, [fps, videoSegments]);
 
   const inferredStartFrame = useMemo(() => {
     if (!isUploadSession) {
@@ -512,9 +573,13 @@ export function AnnotationPage() {
     return inferVideoStartFrame(events, fps);
   }, [events, fps, isUploadSession]);
 
-  const playheadStartFrame = hasSegmentRanges ? segmentStartFrame : inferredStartFrame;
+  const uploadStartFrame =
+    isUploadSession && typeof session?.video_start_frame === "number"
+      ? session.video_start_frame
+      : inferredStartFrame;
+  const playheadStartFrame = activeVideoSegment?.start_frame ?? uploadStartFrame;
 
-  const currentFrame = playheadStartFrame + Math.round(currentTime * fps);
+  const currentFrame = playheadStartFrame + currentSegmentFrame;
   const selectedFrameDelta = selectedAnchorFrame === null ? null : selectedAnchorFrame - currentFrame;
   const saveStateLabel = saveState === "saving"
     ? "Saving changes"
@@ -526,7 +591,7 @@ export function AnnotationPage() {
   const sessionLabel = session?.session_name?.trim() || session?.match_id || "Session";
   const originalCsvExportUrl = sessionId ? buildSessionCsvExportUrl(sessionId, "initial") : "";
   const editedCsvExportUrl = sessionId ? buildSessionCsvExportUrl(sessionId, "current") : "";
-  const getTimestampOffsetForPeriod = (periodId: number | null | undefined, nearFrame?: number): number => {
+  const getTimestampOffsetForPeriod = useCallback((periodId: number | null | undefined, nearFrame?: number): number => {
     const targetPeriod = typeof periodId === "number" && Number.isFinite(periodId) ? periodId : 1;
     if (typeof nearFrame === "number" && Number.isFinite(nearFrame)) {
       const nearby = syncedTimingPoints
@@ -541,7 +606,31 @@ export function AnnotationPage() {
       return byPeriod;
     }
     return defaultTimestampOffset;
-  };
+  }, [defaultTimestampOffset, periodTimestampOffsets, syncedTimingPoints]);
+  const normalizedPairSelection = useMemo(() => {
+    return Array.from(new Set(pairSelection))
+      .filter((index) => index >= 0 && index < events.length)
+      .sort((a, b) => a - b)
+      .slice(0, 2);
+  }, [events.length, pairSelection]);
+  const pairSourceIndex = normalizedPairSelection.length === 2 ? normalizedPairSelection[0] : null;
+  const pairTargetIndex = normalizedPairSelection.length === 2 ? normalizedPairSelection[1] : null;
+  const pairSourceRow = pairSourceIndex === null ? null : events[pairSourceIndex] ?? null;
+  const pairTargetRow = pairTargetIndex === null ? null : events[pairTargetIndex] ?? null;
+  const canAlignPair = !!(
+    pairSourceRow
+    && pairTargetRow
+    && typeof pairTargetRow.synced_frame_id === "number"
+    && Number.isFinite(pairTargetRow.synced_frame_id)
+    && !hasPendingRowChanges
+  );
+  const pairAlignTitle = hasPendingRowChanges
+    ? "Apply or discard row edits first."
+    : normalizedPairSelection.length !== 2
+      ? "Hold Command and click two rows."
+      : canAlignPair
+        ? "Align the earlier row to the later row's synced frame."
+        : "The later row needs a synced_frame_id.";
   const activePeriodId = draftRow?.period_id ?? selectedRow?.period_id ?? 1;
   const activeTimestampOffset = getTimestampOffsetForPeriod(activePeriodId, currentFrame);
   const absoluteTimestamp = useMemo(
@@ -619,18 +708,51 @@ export function AnnotationPage() {
   }, [routeSessionId, matchId]);
 
   useEffect(() => {
-    if (videoCandidates.length === 0) {
+    if (videoSegments.length === 0) {
       setSelectedVideoIndex(0);
       return;
     }
-    if (selectedVideoIndex > videoCandidates.length - 1) {
+    if (selectedVideoIndex > videoSegments.length - 1) {
       setSelectedVideoIndex(0);
     }
-  }, [selectedVideoIndex, videoCandidates]);
+  }, [selectedVideoIndex, videoSegments.length]);
 
   useEffect(() => {
-    setCurrentTime(0);
+    setCurrentSegmentFrame(0);
   }, [selectedVideoIndex]);
+
+  const syncDisplayedSegmentFrame = useCallback(
+    (videoEl: HTMLVideoElement, mediaTime?: number) => {
+      const nextFrame = getSegmentFrameFromTime(mediaTime ?? videoEl.currentTime, activeVideoFps);
+      setCurrentSegmentFrame(nextFrame);
+    },
+    [activeVideoFps],
+  );
+
+  const seekVideoToSegmentFrame = useCallback(
+    (segmentFrame: number, videoEl?: HTMLVideoElement | null) => {
+      const targetVideo = videoEl ?? videoRef.current;
+      if (!targetVideo) {
+        return;
+      }
+      const targetTime = getSeekTimeForSegmentFrame(segmentFrame, activeVideoFps, targetVideo.duration);
+      targetVideo.currentTime = targetTime;
+    },
+    [activeVideoFps],
+  );
+
+  const seekBySegmentFrames = useCallback(
+    (deltaFrames: number) => {
+      const videoEl = videoRef.current;
+      if (!videoEl) {
+        return;
+      }
+      const baseFrame = getSegmentFrameFromTime(videoEl.currentTime, activeVideoFps);
+      const nextFrame = Math.max(0, baseFrame + deltaFrames);
+      seekVideoToSegmentFrame(nextFrame, videoEl);
+    },
+    [activeVideoFps, seekVideoToSegmentFrame],
+  );
 
   useEffect(() => {
     if (!selectedRow) {
@@ -645,19 +767,46 @@ export function AnnotationPage() {
       return;
     }
 
-    const currentRange = segmentRanges[selectedVideoIndex];
-    if (!currentRange) {
+    if (!activeVideoSegment) {
       return;
     }
     if (!videoRef.current) {
       return;
     }
 
-    const targetTime = Math.max(0, (pendingSeekFrame - currentRange.start) / fps);
-    videoRef.current.currentTime = targetTime;
-    setCurrentTime(targetTime);
+    const targetSegmentFrame = pendingSeekFrame - activeVideoSegment.start_frame;
+    seekVideoToSegmentFrame(targetSegmentFrame, videoRef.current);
     setPendingSeekFrame(null);
-  }, [pendingSeekFrame, selectedVideoIndex, segmentRanges, fps]);
+  }, [activeVideoSegment, pendingSeekFrame, seekVideoToSegmentFrame]);
+
+  useEffect(() => {
+    const videoEl = videoRef.current;
+    if (!videoEl || !supportsVideoFrameCallback(videoEl)) {
+      return;
+    }
+
+    const requestFrame = videoEl.requestVideoFrameCallback.bind(videoEl);
+    const cancelFrame =
+      typeof videoEl.cancelVideoFrameCallback === "function"
+        ? videoEl.cancelVideoFrameCallback.bind(videoEl)
+        : null;
+    let callbackId = 0;
+    let cancelled = false;
+
+    const handleFrame = (_now: number, metadata: VideoFrameCallbackMetadata) => {
+      if (cancelled) {
+        return;
+      }
+      syncDisplayedSegmentFrame(videoEl, metadata.mediaTime);
+      callbackId = requestFrame(handleFrame);
+    };
+
+    callbackId = requestFrame(handleFrame);
+    return () => {
+      cancelled = true;
+      cancelFrame?.(callbackId);
+    };
+  }, [selectedVideoIndex, syncDisplayedSegmentFrame, videoUrl]);
 
   const loadAll = async () => {
     if (!sessionId) return;
@@ -669,6 +818,7 @@ export function AnnotationPage() {
         const eventData = await fetchEvents(sessionId);
         const normalized = normalizeMissingRowsByFrame(eventData.events, s.fps ?? 25);
         setEvents(normalized.rows);
+        setPairSelection([]);
         setWarnings(eventData.validation_warnings);
         setInitialLoaded(true);
         setDirty(normalized.changed);
@@ -718,6 +868,7 @@ export function AnnotationPage() {
           const eventData = await fetchEvents(sessionId);
           const normalized = normalizeMissingRowsByFrame(eventData.events, updated.fps ?? 25);
           setEvents(normalized.rows);
+          setPairSelection([]);
           setWarnings(eventData.validation_warnings);
           setInitialLoaded(true);
           setDirty(normalized.changed);
@@ -772,8 +923,57 @@ export function AnnotationPage() {
     }
     // Auto-follow only when frame/events change. Avoid overriding manual row click
     // simply because selectedIndex changed in the same frame.
-    setSelectedIndex((prev) => (prev === targetIndex ? prev : targetIndex));
+    setSelectedIndex((prev) => {
+      if (prev !== targetIndex) {
+        setPairSelection([targetIndex]);
+      }
+      return prev === targetIndex ? prev : targetIndex;
+    });
   }, [currentFrame, events, hasPendingRowChanges]);
+
+  const alignPairToLaterSync = useCallback(() => {
+    if (!canAlignPair || pairSourceIndex === null || !pairTargetRow) {
+      return;
+    }
+
+    const targetFrame = pairTargetRow.synced_frame_id;
+    if (typeof targetFrame !== "number") {
+      return;
+    }
+    const targetTimestamp =
+      pairTargetRow.synced_ts
+      ?? frameToEventTimestamp(
+        targetFrame,
+        fps,
+        getTimestampOffsetForPeriod(pairTargetRow.period_id, targetFrame),
+      );
+
+    const nextEvents = [...events];
+    const sourceRow = nextEvents[pairSourceIndex];
+    if (!sourceRow) {
+      return;
+    }
+
+    nextEvents[pairSourceIndex] = {
+      ...sourceRow,
+      synced_frame_id: targetFrame,
+      synced_ts: targetTimestamp,
+    };
+    setEvents(nextEvents);
+    setDirty(true);
+    setSaveState("saved");
+    setSaveMessage(
+      `Aligned row #${pairSourceIndex + 1} to row #${(pairTargetIndex ?? pairSourceIndex) + 1}`,
+    );
+  }, [
+    canAlignPair,
+    events,
+    fps,
+    getTimestampOffsetForPeriod,
+    pairSourceIndex,
+    pairTargetIndex,
+    pairTargetRow,
+  ]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -781,6 +981,11 @@ export function AnnotationPage() {
         return;
       }
       if (isInteractiveTarget(event.target)) {
+        return;
+      }
+      if (event.key === "Enter" && canAlignPair) {
+        event.preventDefault();
+        alignPairToLaterSync();
         return;
       }
       if (!videoRef.current) {
@@ -797,22 +1002,24 @@ export function AnnotationPage() {
         }
       } else if (event.key === "ArrowLeft") {
         event.preventDefault();
-        const step = event.shiftKey ? KEYBOARD_SEEK_SECONDS : 1 / fps;
-        const nextTime = Math.max(0, videoRef.current.currentTime - step);
-        videoRef.current.currentTime = nextTime;
-        setCurrentTime(nextTime);
+        if (event.shiftKey) {
+          seekBySegmentFrames(-Math.max(1, Math.round(KEYBOARD_SEEK_SECONDS * activeVideoFps)));
+        } else {
+          seekBySegmentFrames(-1);
+        }
       } else if (event.key === "ArrowRight") {
         event.preventDefault();
-        const step = event.shiftKey ? KEYBOARD_SEEK_SECONDS : 1 / fps;
-        const nextTime = Math.max(0, videoRef.current.currentTime + step);
-        videoRef.current.currentTime = nextTime;
-        setCurrentTime(nextTime);
+        if (event.shiftKey) {
+          seekBySegmentFrames(Math.max(1, Math.round(KEYBOARD_SEEK_SECONDS * activeVideoFps)));
+        } else {
+          seekBySegmentFrames(1);
+        }
       }
     };
 
     window.addEventListener("keydown", handler, { capture: true });
     return () => window.removeEventListener("keydown", handler, { capture: true });
-  }, [fps]);
+  }, [activeVideoFps, alignPairToLaterSync, canAlignPair, seekBySegmentFrames]);
 
   const updateDraftRow = (patch: Partial<EventRow>) => {
     setDraftRow((prev) => {
@@ -912,10 +1119,62 @@ export function AnnotationPage() {
   };
 
   const jump = (delta: number) => {
-    if (!videoRef.current) return;
-    const nextTime = Math.max(0, videoRef.current.currentTime + delta);
-    videoRef.current.currentTime = nextTime;
-    setCurrentTime(nextTime);
+    const direction = delta < 0 ? -1 : 1;
+    const frameDelta = Math.max(1, Math.round(Math.abs(delta) * activeVideoFps)) * direction;
+    seekBySegmentFrames(frameDelta);
+  };
+
+  const handleAddVideoSegment = async () => {
+    if (!sessionId) {
+      return;
+    }
+    if (!segmentUploadFile) {
+      setSaveState("error");
+      setSaveMessage("Select a video file first.");
+      return;
+    }
+
+    const parsed = Number(segmentUploadStartFrame.trim());
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      setSaveState("error");
+      setSaveMessage("Video start frame must be a non-negative number.");
+      return;
+    }
+
+    const startFrame = Math.round(parsed);
+    setUploadingSegment(true);
+    setSaveState("saving");
+    setSaveMessage("");
+    try {
+      const updated = await addSessionVideo({
+        sessionId,
+        videoFile: segmentUploadFile,
+        startFrame,
+      });
+      setSession(updated);
+      let nextIndex = 0;
+      for (let index = updated.video_segments.length - 1; index >= 0; index -= 1) {
+        const segment = updated.video_segments[index];
+        if (
+          segment?.start_frame === startFrame
+          && (segment.original_filename ?? "").trim() === segmentUploadFile.name.trim()
+        ) {
+          nextIndex = index;
+          break;
+        }
+      }
+      setSelectedVideoIndex(nextIndex);
+      setPendingSeekFrame(startFrame);
+      setSegmentUploadFile(null);
+      setSegmentUploadStartFrame("");
+      setSaveState("saved");
+      setSaveMessage("Video segment updated");
+    } catch (err) {
+      setSaveState("error");
+      setSaveMessage((err as Error).message);
+    } finally {
+      setUploadingSegment(false);
+    }
   };
 
   const seekToAbsoluteFrame = (absoluteFrame: number) => {
@@ -923,43 +1182,39 @@ export function AnnotationPage() {
       return;
     }
 
-    if (!hasSegmentRanges) {
-      const targetTime = Math.max(0, (absoluteFrame - playheadStartFrame) / fps);
-      if (videoRef.current) {
-        videoRef.current.currentTime = targetTime;
-      }
-      setCurrentTime(targetTime);
+    if (videoSegments.length <= 1 || !activeVideoSegment) {
+      seekVideoToSegmentFrame(absoluteFrame - playheadStartFrame);
       return;
     }
 
-    const rangedSegments = segmentRanges
-      .map((range, index) => ({ range, index }))
-      .filter((item): item is { range: { start: number; end: number }; index: number } => item.range !== null);
+    const rangedSegments = videoSegments
+      .map((segment, index) => ({ segment, index, endFrame: getSegmentEndFrame(segment) }))
+      .filter(
+        (item): item is { segment: VideoSegment; index: number; endFrame: number } =>
+          item.endFrame !== null,
+      );
     if (rangedSegments.length === 0) {
       return;
     }
 
-    let targetIndex = rangedSegments.find((item) => absoluteFrame >= item.range.start && absoluteFrame <= item.range.end)?.index ?? -1;
+    let targetIndex = rangedSegments.find(
+      (item) => absoluteFrame >= item.segment.start_frame && absoluteFrame <= item.endFrame,
+    )?.index ?? -1;
     if (targetIndex < 0) {
       const first = rangedSegments[0];
       const last = rangedSegments[rangedSegments.length - 1];
-      targetIndex = absoluteFrame < first.range.start ? first.index : last.index;
+      targetIndex = absoluteFrame < first.segment.start_frame ? first.index : last.index;
     }
 
-    const targetRange = segmentRanges[targetIndex];
-    if (!targetRange) return;
-    const targetTime = Math.max(0, (absoluteFrame - targetRange.start) / fps);
-
+    const targetSegment = videoSegments[targetIndex];
+    if (!targetSegment) return;
     if (targetIndex !== selectedVideoIndex) {
       setPendingSeekFrame(absoluteFrame);
       setSelectedVideoIndex(targetIndex);
       return;
     }
 
-    if (videoRef.current) {
-      videoRef.current.currentTime = targetTime;
-    }
-    setCurrentTime(targetTime);
+    seekVideoToSegmentFrame(absoluteFrame - targetSegment.start_frame);
     setPendingSeekFrame(null);
   };
 
@@ -981,16 +1236,41 @@ export function AnnotationPage() {
     );
     if (exactIndex >= 0) {
       setSelectedIndex(exactIndex);
+      setPairSelection([exactIndex]);
     } else {
       const nearestIndex = findEventIndexByFrame(events, frameId);
       if (nearestIndex !== null) {
         setSelectedIndex(nearestIndex);
+        setPairSelection([nearestIndex]);
       }
     }
     seekToAbsoluteFrame(frameId);
   };
 
-  const handleSelectEvent = (index: number) => {
+  const updatePairSelectionOnly = (index: number) => {
+    setPairSelection((prev) => {
+      const validPrev = prev.filter((item) => item >= 0 && item < events.length);
+      if (validPrev.length === 0 || validPrev.length >= 2 || validPrev.includes(index)) {
+        return [index];
+      }
+      return [validPrev[0], index];
+    });
+  };
+
+  const handleSelectEvent = (index: number, event: MouseEvent<HTMLTableRowElement>) => {
+    if (event.metaKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (hasPendingRowChanges) {
+        setSaveState("error");
+        setSaveMessage("Apply or discard row edits before pair selection.");
+        return;
+      }
+      suppressAutoFollowRef.current = true;
+      updatePairSelectionOnly(index);
+      return;
+    }
+
     if (index !== selectedIndex && hasPendingRowChanges) {
       const discard = window.confirm("You have unapplied changes in this row. Discard them and continue?");
       if (!discard) {
@@ -1003,6 +1283,7 @@ export function AnnotationPage() {
     }
     suppressAutoFollowRef.current = true;
     setSelectedIndex(index);
+    setPairSelection([index]);
     const row = events[index];
     if (!row) return;
 
@@ -1053,6 +1334,7 @@ export function AnnotationPage() {
     nextEvents.splice(insertIndex, 0, newRow);
     setEvents(nextEvents);
     setSelectedIndex(insertIndex);
+    setPairSelection([insertIndex]);
     setDirty(true);
   };
 
@@ -1068,8 +1350,10 @@ export function AnnotationPage() {
 
     const nextEvents = [...events];
     nextEvents.splice(selectedIndex, 1);
+    const nextSelectedIndex = nextEvents.length === 0 ? 0 : Math.min(selectedIndex, nextEvents.length - 1);
     setEvents(nextEvents);
-    setSelectedIndex(nextEvents.length === 0 ? 0 : Math.min(selectedIndex, nextEvents.length - 1));
+    setSelectedIndex(nextSelectedIndex);
+    setPairSelection(nextEvents.length === 0 ? [] : [nextSelectedIndex]);
     setDirty(true);
   };
 
@@ -1104,6 +1388,7 @@ export function AnnotationPage() {
         if (eventData.events.length === 0) return 0;
         return Math.min(prev, eventData.events.length - 1);
       });
+      setPairSelection([]);
       setDirty(false);
     } catch (err) {
       setSaveState("error");
@@ -1155,6 +1440,7 @@ export function AnnotationPage() {
             <span className="meta-pill">{events.length} rows</span>
             <span className="meta-pill">{isUploadSession ? "Uploaded CSV" : "Public Dataset"}</span>
             {isUploadSession && <span className="meta-pill">{session.persist ? "Saved" : "Temporary"}</span>}
+            {isUploadSession && <span className="meta-pill">Start frame {playheadStartFrame}</span>}
             <span className={`status-chip ${saveState}`} aria-live="polite">
               {saveState === "saving" && <span className="spinner" aria-hidden="true" />}
               {saveStateLabel}
@@ -1187,15 +1473,15 @@ export function AnnotationPage() {
           </div>
           {videoUrl ? (
             <>
-              {videoCandidates.length > 1 && (
+              {videoSegments.length > 1 && (
                 <label>
                   Segment
                   <select
-                    value={selectedVideoIndex}
+                    value={activeVideoIndex}
                     onChange={(e) => setSelectedVideoIndex(Number(e.target.value) || 0)}
                   >
-                    {videoCandidates.map((url, idx) => (
-                      <option key={url} value={idx}>
+                    {videoSegments.map((segment, idx) => (
+                      <option key={segment.id} value={idx}>
                         {segmentOptionLabels[idx] ?? `Segment ${idx + 1}`}
                       </option>
                     ))}
@@ -1214,30 +1500,68 @@ export function AnnotationPage() {
                   </div>
                 </div>
                 <div className="frame-readout-sub">
-                  Absolute time {absoluteTimestamp} | Segment frame {Math.round(currentTime * fps)}
+                  Absolute time {absoluteTimestamp} | Video start {playheadStartFrame} | Segment frame {currentSegmentFrame}
                 </div>
               </div>
               <video
                 ref={videoRef}
                 src={videoUrl}
                 controls
-                onTimeUpdate={(e) => setCurrentTime((e.target as HTMLVideoElement).currentTime)}
-                onSeeked={(e) => setCurrentTime((e.target as HTMLVideoElement).currentTime)}
+                onTimeUpdate={(e) => {
+                  syncDisplayedSegmentFrame(e.currentTarget);
+                }}
+                onSeeked={(e) => {
+                  const videoEl = e.currentTarget;
+                  window.requestAnimationFrame(() => {
+                    syncDisplayedSegmentFrame(videoEl);
+                  });
+                }}
                 onLoadedMetadata={(e) => {
-                  const videoEl = e.target as HTMLVideoElement;
+                  const videoEl = e.currentTarget;
                   if (pendingSeekFrame !== null) {
-                    const range = segmentRanges[selectedVideoIndex];
-                    if (range) {
-                      const targetTime = Math.max(0, (pendingSeekFrame - range.start) / fps);
-                      videoEl.currentTime = targetTime;
-                      setCurrentTime(targetTime);
+                    if (activeVideoSegment) {
+                      seekVideoToSegmentFrame(pendingSeekFrame - activeVideoSegment.start_frame, videoEl);
                       setPendingSeekFrame(null);
                       return;
                     }
                   }
-                  setCurrentTime(videoEl.currentTime || 0);
+                  syncDisplayedSegmentFrame(videoEl);
                 }}
               />
+              <div className="video-segment-editor">
+                <label className="video-segment-upload">
+                  <span className="video-segment-upload-label">Replace or add video</span>
+                  <input
+                    key={segmentUploadFile?.name ?? "video-segment-empty"}
+                    type="file"
+                    accept=".mp4,.mov,.m4v,.webm,video/*"
+                    onChange={(e) => setSegmentUploadFile(e.target.files?.[0] ?? null)}
+                    disabled={uploadingSegment}
+                  />
+                  <span className="video-segment-upload-name">
+                    {segmentUploadFile?.name ?? "Choose video file"}
+                  </span>
+                </label>
+                <label className="video-segment-start-field">
+                  Start frame
+                  <input
+                    type="number"
+                    min={0}
+                    value={segmentUploadStartFrame}
+                    onChange={(e) => setSegmentUploadStartFrame(e.target.value)}
+                    placeholder="e.g. 25000"
+                    disabled={uploadingSegment}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => void handleAddVideoSegment()}
+                  disabled={uploadingSegment}
+                >
+                  {uploadingSegment ? "Uploading..." : "Upload Video Segment"}
+                </button>
+              </div>
               <div className="row controls-row">
                 <button onClick={() => jump(-5)}>-5s</button>
                 <button
@@ -1253,8 +1577,8 @@ export function AnnotationPage() {
                   Play / Pause
                 </button>
                 <button onClick={() => jump(5)}>+5s</button>
-                <button onClick={() => jump(-1 / fps)}>Prev Frame (←)</button>
-                <button onClick={() => jump(1 / fps)}>Next Frame (→)</button>
+                <button onClick={() => seekBySegmentFrames(-1)}>Prev Frame (←)</button>
+                <button onClick={() => seekBySegmentFrames(1)}>Next Frame (→)</button>
                 <button onClick={() => jump(-KEYBOARD_SEEK_SECONDS)}>-0.2s (Shift+←)</button>
                 <button onClick={() => jump(KEYBOARD_SEEK_SECONDS)}>+0.2s (Shift+→)</button>
               </div>
@@ -1269,6 +1593,15 @@ export function AnnotationPage() {
             <div className="section-header">
               <h2>Timeline</h2>
               <div className="section-actions">
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={alignPairToLaterSync}
+                  disabled={!canAlignPair}
+                  title={pairAlignTitle}
+                >
+                  Align to Later Sync
+                </button>
                 <button onClick={addMissingRow}>Add Missing Event</button>
                 <button className="danger" disabled={!selectedRow} onClick={removeSelectedRow}>Delete Row</button>
               </div>
@@ -1302,6 +1635,7 @@ export function AnnotationPage() {
             <EventTable
               rows={events}
               selectedIndex={selectedIndex}
+              pairSelection={normalizedPairSelection}
               currentFrame={currentFrame}
               onSelect={handleSelectEvent}
             />

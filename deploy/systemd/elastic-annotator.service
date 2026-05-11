@@ -6,8 +6,8 @@ After=network.target
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/opt/elastic-annotator
-EnvironmentFile=/opt/elastic-annotator/.env
+WorkingDirectory=/home/ubuntu/elastic-annotator
+EnvironmentFile=/home/ubuntu/elastic-annotator/.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/env uv run uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 1
 Restart=always

@@ -86,7 +86,7 @@ export async function fetchEvents(sessionId: string): Promise<EventListResponse>
 }
 
 function sessionPriority(session: SessionStatus): number {
-  const videoCount = session.video_urls?.length ?? 0;
+  const videoCount = session.video_segments?.length ?? session.video_urls?.length ?? 0;
   if (session.status === "ready" && videoCount > 0) return 0;
   if (session.status === "processing") return 1;
   if (session.status === "ready") return 2;
@@ -137,11 +137,28 @@ export async function resetEvents(sessionId: string): Promise<{
   });
 }
 
+export async function updateSessionMetadata(
+  sessionId: string,
+  payload: { video_start_frame?: number | null; title?: string | null },
+): Promise<SessionStatus> {
+  return request<SessionStatus>(`/api/sessions/${sessionId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteSession(sessionId: string): Promise<{ ok: boolean; session_id: string }> {
+  return request<{ ok: boolean; session_id: string }>(`/api/sessions/${sessionId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function createUploadSession(payload: {
   videoFile: File;
   csvFile: File;
   persist: boolean;
   sessionName?: string;
+  videoStartFrame?: number;
 }): Promise<SessionStatus> {
   const formData = new FormData();
   formData.append("video_file", payload.videoFile);
@@ -151,8 +168,33 @@ export async function createUploadSession(payload: {
   if (normalizedSessionName) {
     formData.append("session_name", normalizedSessionName);
   }
+  if (typeof payload.videoStartFrame === "number" && Number.isFinite(payload.videoStartFrame)) {
+    formData.append("video_start_frame", String(Math.round(payload.videoStartFrame)));
+  }
 
   const response = await fetch(`${API_BASE}/api/upload-sessions`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `HTTP ${response.status}`);
+  }
+
+  return response.json() as Promise<SessionStatus>;
+}
+
+export async function addSessionVideo(payload: {
+  sessionId: string;
+  videoFile: File;
+  startFrame: number;
+}): Promise<SessionStatus> {
+  const formData = new FormData();
+  formData.append("video_file", payload.videoFile);
+  formData.append("start_frame", String(Math.round(payload.startFrame)));
+
+  const response = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(payload.sessionId)}/videos`, {
     method: "POST",
     body: formData,
   });

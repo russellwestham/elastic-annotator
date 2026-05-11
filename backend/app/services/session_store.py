@@ -54,6 +54,7 @@ class SessionStore:
             "fps": None,
             "video_url": None,
             "video_urls": [],
+            "video_segments": [],
             "validation_warnings": validation_warnings or [],
             "created_at": created_at,
             "updated_at": created_at,
@@ -80,6 +81,16 @@ class SessionStore:
             metadata["updated_at"] = self._now_iso()
             self._write_json(path, metadata)
         return metadata
+
+    def delete_session(self, session_id: str) -> bool:
+        session_dir = self.session_dir(session_id)
+        if not session_dir.exists():
+            return False
+        with self._lock:
+            if not session_dir.exists():
+                return False
+            shutil.rmtree(session_dir, ignore_errors=False)
+        return True
 
     def load_events(self, session_id: str) -> list[dict[str, Any]]:
         path = self.session_dir(session_id) / "events.json"
@@ -272,6 +283,13 @@ class SessionStore:
             "fps",
             "video_url",
             "video_urls",
+            "video_segments",
+            "video_start_frame",
+            "video_start_frame_source",
+            "video_start_frame_confirmed",
+            "original_video_filename",
+            "video_duration_seconds",
+            "video_frame_count",
             "validation_warnings",
             "created_at",
             "updated_at",
@@ -289,6 +307,7 @@ class SessionStore:
                     "fps": None,
                     "video_url": None,
                     "video_urls": [],
+                    "video_segments": [],
                     "updated_at": self._now_iso(),
                 }
             )

@@ -19,6 +19,17 @@ export interface DefaultDatasetRoot {
   exists: boolean;
 }
 
+export interface VideoSegment {
+  id: string;
+  url: string;
+  original_filename?: string | null;
+  start_frame: number;
+  frame_count?: number | null;
+  duration_seconds?: number | null;
+  fps?: number | null;
+  created_at: string;
+}
+
 export interface SessionStatus {
   session_id: string;
   annotator_name: string;
@@ -36,6 +47,13 @@ export interface SessionStatus {
   fps?: number | null;
   video_url?: string | null;
   video_urls?: string[] | null;
+  video_start_frame?: number | null;
+  original_video_filename?: string | null;
+  video_start_frame_source?: string | null;
+  video_start_frame_confirmed: boolean;
+  video_duration_seconds?: number | null;
+  video_frame_count?: number | null;
+  video_segments: VideoSegment[];
 }
 
 export interface EventRow {

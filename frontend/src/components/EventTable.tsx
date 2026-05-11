@@ -1,12 +1,13 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type MouseEvent } from "react";
 
 import type { EventRow } from "../types";
 
 interface EventTableProps {
   rows: EventRow[];
   selectedIndex: number;
+  pairSelection: number[];
   currentFrame: number;
-  onSelect: (index: number) => void;
+  onSelect: (index: number, event: MouseEvent<HTMLTableRowElement>) => void;
 }
 
 function getAnchorFrame(row: EventRow): number | null {
@@ -15,7 +16,7 @@ function getAnchorFrame(row: EventRow): number | null {
   return null;
 }
 
-export function EventTable({ rows, selectedIndex, currentFrame, onSelect }: EventTableProps) {
+export function EventTable({ rows, selectedIndex, pairSelection, currentFrame, onSelect }: EventTableProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const headerRef = useRef<HTMLTableSectionElement | null>(null);
   const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
@@ -59,6 +60,7 @@ export function EventTable({ rows, selectedIndex, currentFrame, onSelect }: Even
             const frameDelta = anchorFrame === null ? null : anchorFrame - currentFrame;
             const isFrameMatch = frameDelta !== null && Math.abs(frameDelta) <= 1;
             const isFrameNear = frameDelta !== null && !isFrameMatch && Math.abs(frameDelta) <= 6;
+            const isPairSelected = pairSelection.includes(index);
 
             return (
               <tr
@@ -68,12 +70,13 @@ export function EventTable({ rows, selectedIndex, currentFrame, onSelect }: Even
                 }}
                 className={[
                   index === selectedIndex ? "selected" : "",
+                  isPairSelected ? "pair-selected" : "",
                   isFrameMatch ? "frame-match" : "",
                   isFrameNear ? "frame-near" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
-                onClick={() => onSelect(index)}
+                onClick={(event) => onSelect(index, event)}
               >
                 <td>{index + 1}</td>
                 <td className={isFrameMatch ? "delta-match" : isFrameNear ? "delta-near" : ""}>
