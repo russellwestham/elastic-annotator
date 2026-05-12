@@ -126,7 +126,8 @@ def _session_has_video_artifact(metadata: dict) -> bool:
 
 def _ready_integrity_reasons(metadata: dict) -> list[str]:
     reasons: list[str] = []
-    if not _session_has_video_artifact(metadata):
+    session_mode = metadata.get("session_mode")
+    if session_mode != "upload_csv" and not _session_has_video_artifact(metadata):
         reasons.append("video_not_prepared")
     return reasons
 
