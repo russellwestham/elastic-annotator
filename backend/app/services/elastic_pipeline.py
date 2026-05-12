@@ -273,16 +273,40 @@ class ElasticPipelineService:
 
     def validate_events(self, events: list[dict]) -> list[str]:
         warnings: list[str] = []
+        for flag in self.summarize_qa_flags(events):
+            summary = str(flag.get("summary") or "").strip()
+            if summary:
+                warnings.append(summary)
+        return warnings
+
+    def summarize_qa_flags(self, events: list[dict]) -> list[dict[str, object]]:
+        missing_receive_frames: list[int] = []
         for event in events:
             spadl_type = str(event.get("spadl_type") or "")
             error_type = event.get("error_type")
             if spadl_type in PASS_LIKE_TYPES and error_type != "false_positive" and not event.get("receive_ts"):
                 synced_frame_id = event.get("synced_frame_id")
-                frame_label = f"frame_id={synced_frame_id}" if synced_frame_id is not None else "frame_id=unknown"
-                warnings.append(
-                    f"{frame_label}: pass-like event {event.get('id')} ({spadl_type}) has empty receive_ts"
-                )
-        return warnings
+                if isinstance(synced_frame_id, int):
+                    missing_receive_frames.append(synced_frame_id)
+
+        flags: list[dict[str, object]] = []
+        if missing_receive_frames:
+            sample_frames = sorted(set(missing_receive_frames))[:5]
+            count = len(missing_receive_frames)
+            flags.append(
+                {
+                    "code": "pass_like_missing_receive_ts",
+                    "title": "Pass-like events missing receive timestamp",
+                    "summary": (
+                        f"{count} pass-like events do not have receive_ts. "
+                        "Review them only if receiver timing should be aligned."
+                    ),
+                    "count": count,
+                    "sample_frame_ids": sample_frames,
+                }
+            )
+
+        return flags
 
     @staticmethod
     def _extract_match_id(filename: str) -> str | None:

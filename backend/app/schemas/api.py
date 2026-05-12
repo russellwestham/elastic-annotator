@@ -110,10 +110,28 @@ class SessionDeleteResponse(BaseModel):
     session_id: str
 
 
+class ImportNoteSummary(BaseModel):
+    code: str
+    title: str
+    summary: str
+    count: int = 0
+    sample_rows: list[int] = Field(default_factory=list)
+
+
+class QAFlagSummary(BaseModel):
+    code: str
+    title: str
+    summary: str
+    count: int = 0
+    sample_frame_ids: list[int] = Field(default_factory=list)
+
+
 class EventListResponse(BaseModel):
     session_id: str
     events: list[EventRow]
-    validation_warnings: list[str] = []
+    validation_warnings: list[str] = Field(default_factory=list)
+    import_notes: list[ImportNoteSummary] = Field(default_factory=list)
+    qa_flags: list[QAFlagSummary] = Field(default_factory=list)
 
 
 class EventSaveRequest(BaseModel):
@@ -123,7 +141,9 @@ class EventSaveRequest(BaseModel):
 class EventSaveResponse(BaseModel):
     ok: bool
     saved_count: int
-    validation_warnings: list[str] = []
+    validation_warnings: list[str] = Field(default_factory=list)
+    import_notes: list[ImportNoteSummary] = Field(default_factory=list)
+    qa_flags: list[QAFlagSummary] = Field(default_factory=list)
 
 
 class DatasetUploadResponse(BaseModel):

@@ -203,14 +203,9 @@ class UploadSessionService:
         if not match:
             return None
 
-        # 유저 요청에 따라 파일명의 숫자를 '초' 단위로 인식하여 프레임으로 변환
         try:
-            start_sec = float(match.group(1))
-            end_sec = float(match.group(2))
-            
-            start_frame = int(round(start_sec * fps))
-            end_frame = int(round(end_sec * fps)) - 1
-            
+            start_frame = int(match.group(1))
+            end_frame = int(match.group(2))
             if end_frame < start_frame:
                 return None
             return start_frame, end_frame
@@ -341,6 +336,7 @@ class UploadSessionService:
         *,
         default_created_at: str,
         default_fps: float | None,
+        prefer_filename_range: bool = False,
     ) -> dict[str, Any] | None:
         url = str(raw_segment.get("url") or "").strip()
         if not url:
@@ -360,17 +356,23 @@ class UploadSessionService:
         start_frame = self._parse_int(None if raw_start_frame is None else str(raw_start_frame))
         if derived_start_frame is not None:
             start_frame = derived_start_frame
+        elif prefer_filename_range and frame_range is not None:
+            start_frame = frame_range[0]
         elif start_frame is None and frame_range is not None:
             start_frame = frame_range[0]
         if start_frame is None or start_frame < 0:
             start_frame = 0
 
         frame_count = self._parse_positive_int(raw_segment.get("frame_count"))
-        if frame_count is None and frame_range is not None:
+        if prefer_filename_range and frame_range is not None:
+            frame_count = frame_range[1] - frame_range[0] + 1
+        elif frame_count is None and frame_range is not None:
             frame_count = frame_range[1] - frame_range[0] + 1
 
         duration_seconds = self._parse_positive_float(raw_segment.get("duration_seconds"))
-        if duration_seconds is None and frame_count is not None and fps is not None:
+        if prefer_filename_range and frame_count is not None and fps is not None:
+            duration_seconds = round(frame_count / fps, 3)
+        elif duration_seconds is None and frame_count is not None and fps is not None:
             duration_seconds = round(frame_count / fps, 3)
         if frame_count is None and duration_seconds is not None and fps is not None:
             frame_count = max(1, int(round(duration_seconds * fps)))
@@ -397,16 +399,26 @@ class UploadSessionService:
         default_fps = self._parse_positive_float(metadata.get("fps"))
         raw_segments = metadata.get("video_segments") or []
         normalized: list[dict[str, Any]] = []
+        session_mode = str(metadata.get("session_mode") or "")
 
         if isinstance(raw_segments, list) and raw_segments:
             for item in raw_segments:
                 if not isinstance(item, dict):
                     continue
+                segment_id = str(item.get("id") or "").strip()
+                has_manual_timing = bool(item.get("timing_confirmed")) or (
+                    item.get("period_start_frame") is not None and item.get("video_start_time_seconds") is not None
+                )
                 segment = self._normalize_segment_payload(
                     session_id,
                     item,
                     default_created_at=default_created_at,
                     default_fps=default_fps,
+                    prefer_filename_range=(
+                        session_mode == "legacy_elastic"
+                        and segment_id.startswith("legacy-")
+                        and not has_manual_timing
+                    ),
                 )
                 if segment is not None:
                     normalized.append(segment)
@@ -453,6 +465,7 @@ class UploadSessionService:
                     },
                     default_created_at=default_created_at,
                     default_fps=default_fps,
+                    prefer_filename_range=True,
                 )
                 if segment is not None:
                     normalized.append(segment)
@@ -615,8 +628,6 @@ class UploadSessionService:
                 error_type = None
 
             event_id = self._canonical_value(row, "id").strip() or f"upload_{len(events) + 1:05d}"
-            if not self._canonical_value(row, "id").strip():
-                warnings.append(f"row {index}: missing id, generated {event_id}")
 
             events.append(
                 {
@@ -644,17 +655,10 @@ class UploadSessionService:
     def create_upload_session(
         self,
         *,
-        video_file: UploadFile,
         csv_file: UploadFile,
         persist: bool,
         session_name: str | None = None,
-        video_start_frame: int | None = None,
     ) -> dict[str, Any]:
-        original_video_filename = Path(video_file.filename or "video.mp4").name
-        video_suffix = Path(original_video_filename).suffix.lower() or ".mp4"
-        if video_suffix not in {".mp4", ".mov", ".m4v", ".webm"}:
-            raise HTTPException(status_code=400, detail="Video upload must be mp4/mov/m4v/webm")
-
         uploaded_csv_name = (Path(csv_file.filename or "uploaded_events.csv").name or "uploaded_events.csv").strip()
         csv_suffix = Path(uploaded_csv_name).suffix.lower()
         if csv_suffix != ".csv":
@@ -673,55 +677,25 @@ class UploadSessionService:
         session_id = metadata["session_id"]
         session_dir = self.store.session_dir(session_id)
 
-        video_name = f"uploaded_video{video_suffix}"
         csv_name = "uploaded_events.csv"
-        video_path = session_dir / video_name
         csv_path = session_dir / csv_name
 
         try:
-            self._copy_upload(video_file, video_path)
             self._copy_upload(csv_file, csv_path)
         finally:
-            video_file.file.close()
             csv_file.file.close()
 
-        fps = self._probe_video_fps(video_path)
-        video_duration_seconds = self._probe_video_duration_seconds(video_path)
+        fps = DEFAULT_FPS
         events, warnings = self.load_events_from_csv(csv_path, fps)
-        inferred_start_frame, video_start_frame_source, video_frame_count = self._recommend_video_start_frame(
-            original_video_filename=original_video_filename,
-            events=events,
-            fps=fps,
-            video_duration_seconds=video_duration_seconds,
-        )
-        resolved_start_frame = int(video_start_frame) if video_start_frame is not None else inferred_start_frame
-        primary_source = "manual" if video_start_frame is not None else video_start_frame_source
-        primary_confirmed = video_start_frame is not None
-        initial_segment = {
-            "id": uuid4().hex[:12],
-            "url": self._artifact_url(session_id, video_name),
-            "original_filename": original_video_filename,
-            "start_frame": resolved_start_frame,
-            "frame_count": video_frame_count,
-            "duration_seconds": video_duration_seconds,
-            "fps": fps,
-            "created_at": metadata["created_at"],
-        }
         self.store.save_initial_events(session_id, events)
         self.store.save_events(session_id, events)
-        patch = self.build_video_metadata_patch(
-            [initial_segment],
-            metadata,
-            primary_source=primary_source,
-            primary_confirmed=primary_confirmed,
-        )
         return self.store.update_metadata(
             session_id,
             status="ready",
             progress="uploaded",
             event_count=len(events),
+            fps=fps,
             validation_warnings=warnings,
-            **patch,
         )
 
     def add_video_segment(

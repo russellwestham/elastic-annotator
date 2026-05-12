@@ -16,7 +16,14 @@ import {
   updateSessionVideoTiming,
 } from "../api";
 import { EventTable } from "../components/EventTable";
-import type { ErrorType, EventRow, SessionStatus, VideoSegment } from "../types";
+import type {
+  ErrorType,
+  EventRow,
+  ImportNoteSummary,
+  QAFlagSummary,
+  SessionStatus,
+  VideoSegment,
+} from "../types";
 
 const ERROR_TYPES: Array<"" | ErrorType> = [
   "",
@@ -34,7 +41,6 @@ const FRAME_TIME_EPSILON = 1e-6;
 const TIMING_MAPPING_FPS = 25;
 const TEAM_PLAYER_ID_PATTERN = /^(home|away)_\d+$/;
 const TEAM_PLAYER_ID_DETAIL_PATTERN = /^(home|away)_(\d+)$/;
-const WARNING_FRAME_PATTERN = /\bframe_id=(\d+)\b/;
 
 type VideoFrameCallbackMetadata = {
   mediaTime: number;
@@ -448,7 +454,7 @@ export function AnnotationPage() {
   const [session, setSession] = useState<SessionStatus | null>(null);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [initialEvents, setInitialEvents] = useState<EventRow[]>([]);
-  const [warnings, setWarnings] = useState<string[]>([]);
+  const [qaFlags, setQaFlags] = useState<QAFlagSummary[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [loading, setLoading] = useState(true);
 
@@ -474,6 +480,17 @@ export function AnnotationPage() {
   const [savingTitle, setSavingTitle] = useState(false);
   const [deletingCurrentSession, setDeletingCurrentSession] = useState(false);
   const [sessionActionError, setSessionActionError] = useState<string | null>(null);
+  const timingCalibrationRef = useRef<HTMLDivElement | null>(null);
+
+  const scrollToCalibration = useCallback(() => {
+    timingCalibrationRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, []);
+  const applyReviewFeedback = useCallback(
+    (payload: { import_notes?: ImportNoteSummary[]; qa_flags?: QAFlagSummary[] }) => {
+      setQaFlags(payload.qa_flags ?? []);
+    },
+    [],
+  );
 
   const selectedRow = events[selectedIndex] ?? null;
   const fps = session?.fps ?? 25;
@@ -608,25 +625,29 @@ export function AnnotationPage() {
       return `${filename}`;
     });
   }, [videoSegments]);
+  const showVideoUploader = isUploadSession || !!videoUrl;
+  const videoUploadLabel = videoUrl ? "Replace or add video" : "Add first video";
 
   const playheadStartFrame = activeVideoSegment?.start_frame ?? 0;
-  const currentFrame = useMemo(() => {
-    if (
-      activeVideoHasTiming
-      && activeVideoSegment
-      && typeof activeVideoSegment.period_start_frame === "number"
-      && typeof activeVideoSegment.video_start_time_seconds === "number"
-    ) {
-      return Math.max(
-        0,
-        Math.round(
-          activeVideoSegment.period_start_frame
-          + (activeVideoSegment.video_start_time_seconds + currentVideoTime) * TIMING_MAPPING_FPS,
-        ),
-      );
+  const currentFrame = useMemo(
+    () => playheadStartFrame + currentSegmentFrame,
+    [currentSegmentFrame, playheadStartFrame],
+  );
+  const selectedRowHasVideoCoverage = useMemo(() => {
+    if (selectedAnchorFrame === null) {
+      return true;
     }
-    return playheadStartFrame + currentSegmentFrame;
-  }, [activeVideoHasTiming, activeVideoSegment, currentSegmentFrame, currentVideoTime, playheadStartFrame]);
+    return videoSegments.some((segment) => {
+      if (!segment.url || selectedAnchorFrame < segment.start_frame) {
+        return false;
+      }
+      const endFrame = getSegmentEndFrame(segment);
+      if (endFrame === null) {
+        return true;
+      }
+      return selectedAnchorFrame <= endFrame;
+    });
+  }, [selectedAnchorFrame, videoSegments]);
   const selectedFrameDelta = selectedAnchorFrame === null ? null : selectedAnchorFrame - currentFrame;
   const saveStateLabel = saveState === "saving"
     ? "Saving changes"
@@ -669,21 +690,27 @@ export function AnnotationPage() {
       : !nextEventRow || typeof nextEventRow.synced_frame_id !== "number" || !Number.isFinite(nextEventRow.synced_frame_id)
         ? "The next event needs a synced_frame_id."
         : "Align this row to the next event's synced frame.";
-  const activePeriodId = draftRow?.period_id ?? selectedRow?.period_id ?? 1;
-  const activeTimestampOffset = getTimestampOffsetForPeriod(activePeriodId, currentFrame);
+  const playbackPeriodId = useMemo(() => {
+    const playbackIndex = findEventIndexByFrame(events, currentFrame);
+    if (playbackIndex !== null) {
+      return events[playbackIndex]?.period_id ?? draftRow?.period_id ?? selectedRow?.period_id ?? 1;
+    }
+    return draftRow?.period_id ?? selectedRow?.period_id ?? 1;
+  }, [currentFrame, draftRow?.period_id, events, selectedRow?.period_id]);
+  const playbackTimestampOffset = getTimestampOffsetForPeriod(playbackPeriodId, currentFrame);
   const getEventTimestampForFrame = useCallback((frame: number, periodId: number | null | undefined) => {
     if (activeVideoHasTiming && activeVideoSegment) {
       return getFrameTimestampFromSegmentTiming(frame, activeVideoSegment);
     }
     return frameToEventTimestamp(frame, fps, getTimestampOffsetForPeriod(periodId, frame));
   }, [activeVideoHasTiming, activeVideoSegment, fps, getTimestampOffsetForPeriod]);
-  const absoluteTimestamp = useMemo(
+  const currentTimestamp = useMemo(
     () => (
       activeVideoHasTiming && activeVideoSegment
         ? formatSeconds((activeVideoSegment.video_start_time_seconds ?? 0) + currentVideoTime)
-        : frameToEventTimestamp(currentFrame, fps, activeTimestampOffset)
+        : frameToEventTimestamp(currentFrame, fps, playbackTimestampOffset)
     ),
-    [activeTimestampOffset, activeVideoHasTiming, activeVideoSegment, currentFrame, currentVideoTime, fps],
+    [activeVideoHasTiming, activeVideoSegment, currentFrame, currentVideoTime, fps, playbackTimestampOffset],
   );
   const parsedSegmentTimingPeriodStartFrame = useMemo(() => {
     const parsed = Number(segmentTimingPeriodStartFrame.trim());
@@ -702,25 +729,7 @@ export function AnnotationPage() {
       Math.round(parsedSegmentTimingPeriodStartFrame + parsedSegmentTimingVideoStartTime * TIMING_MAPPING_FPS),
     );
   }, [parsedSegmentTimingPeriodStartFrame, parsedSegmentTimingVideoStartTime]);
-  const warningItems = useMemo(
-    () =>
-      warnings.slice(0, 20).map((text, index) => {
-        const match = text.match(WARNING_FRAME_PATTERN);
-        if (!match) {
-          return { key: `${text}-${index}`, text, frameId: null as number | null, body: text };
-        }
-
-        const frameId = Number(match[1]);
-        const body = text.replace(WARNING_FRAME_PATTERN, "").replace(/^:\s*/, "").trim();
-        return {
-          key: `${text}-${index}`,
-          text,
-          frameId: Number.isFinite(frameId) ? frameId : null,
-          body: body || text,
-        };
-      }),
-    [warnings],
-  );
+  const hasReviewInsights = qaFlags.length > 0 || !!saveMessage;
 
   useEffect(() => {
     if (routeSessionId) {
@@ -745,7 +754,7 @@ export function AnnotationPage() {
           setSession(null);
           setEvents([]);
           setInitialEvents([]);
-          setWarnings([]);
+          applyReviewFeedback({});
           setInitialLoaded(false);
           setDirty(false);
           setSaveState("error");
@@ -760,7 +769,7 @@ export function AnnotationPage() {
         setSession(null);
         setEvents([]);
         setInitialEvents([]);
-        setWarnings([]);
+        applyReviewFeedback({});
         setInitialLoaded(false);
         setDirty(false);
         setSaveState("error");
@@ -772,7 +781,7 @@ export function AnnotationPage() {
     return () => {
       cancelled = true;
     };
-  }, [routeSessionId, matchId]);
+  }, [applyReviewFeedback, matchId, routeSessionId]);
 
   useEffect(() => {
     if (videoSegments.length === 0) {
@@ -911,7 +920,7 @@ export function AnnotationPage() {
         const normalized = normalizeMissingRowsByFrame(eventData.events, s.fps ?? 25);
         setEvents(normalized.rows);
         setInitialEvents(initialEventData?.events?.length ? initialEventData.events : eventData.events);
-        setWarnings(eventData.validation_warnings);
+        applyReviewFeedback(eventData);
         setInitialLoaded(true);
         setDirty(normalized.changed);
         if (normalized.changed) {
@@ -964,7 +973,7 @@ export function AnnotationPage() {
           const normalized = normalizeMissingRowsByFrame(eventData.events, updated.fps ?? 25);
           setEvents(normalized.rows);
           setInitialEvents(initialEventData?.events?.length ? initialEventData.events : eventData.events);
-          setWarnings(eventData.validation_warnings);
+          applyReviewFeedback(eventData);
           setInitialLoaded(true);
           setDirty(normalized.changed);
           if (normalized.changed) {
@@ -976,7 +985,7 @@ export function AnnotationPage() {
     }, 2000);
 
     return () => window.clearInterval(timer);
-  }, [session, sessionId]);
+  }, [applyReviewFeedback, session, sessionId]);
 
   useEffect(() => {
     if (!initialLoaded || !dirty || !sessionId) {
@@ -987,7 +996,7 @@ export function AnnotationPage() {
       setSaveState("saving");
       try {
         const result = await saveEvents(sessionId, events);
-        setWarnings(result.validation_warnings);
+        applyReviewFeedback(result);
         setSaveState("saved");
         setSaveMessage(`Saved ${result.saved_count} rows`);
         setDirty(false);
@@ -998,7 +1007,7 @@ export function AnnotationPage() {
     }, 700);
 
     return () => window.clearTimeout(timer);
-  }, [dirty, events, initialLoaded, sessionId]);
+  }, [applyReviewFeedback, dirty, events, initialLoaded, sessionId]);
 
   useEffect(() => {
     if (events.length === 0) {
@@ -1590,7 +1599,7 @@ export function AnnotationPage() {
     setSaveState("saving");
     try {
       const result = await resetEvents(sessionId);
-      setWarnings(result.validation_warnings);
+      applyReviewFeedback(result);
       setSaveState("saved");
       setSaveMessage(
         result.source === "snapshot"
@@ -1605,7 +1614,7 @@ export function AnnotationPage() {
       ]);
       setEvents(eventData.events);
       setInitialEvents(initialEventData?.events?.length ? initialEventData.events : eventData.events);
-      setWarnings(eventData.validation_warnings);
+      applyReviewFeedback(eventData);
       setSelectedIndex((prev) => {
         if (eventData.events.length === 0) return 0;
         return Math.min(prev, eventData.events.length - 1);
@@ -1704,51 +1713,72 @@ export function AnnotationPage() {
             </div>
           )}
           <div className="annot-meta">
-            <span className="meta-pill">{fps} fps</span>
             <span className="meta-pill">{events.length} rows</span>
             <span className="meta-pill">{isUploadSession ? "Uploaded CSV" : "Public Dataset"}</span>
-            {isUploadSession && <span className="meta-pill">{session.persist ? "Saved" : "Temporary"}</span>}
-            {isUploadSession && <span className="meta-pill">25 fps mapping</span>}
-            {isUploadSession && <span className="meta-pill">{activeVideoHasTiming ? "Timing Ready" : "Needs Timing"}</span>}
-            <span className={`status-chip ${saveState}`} aria-live="polite">
-              {saveState === "saving" && <span className="spinner" aria-hidden="true" />}
-              {saveStateLabel}
-            </span>
+            {isUploadSession && !session.persist && <span className="meta-pill">Temporary</span>}
+            {saveState !== "idle" && (
+              <span className={`status-chip ${saveState}`} aria-live="polite">
+                {saveState === "saving" && <span className="spinner" aria-hidden="true" />}
+                {saveStateLabel}
+              </span>
+            )}
           </div>
           {sessionActionError ? <p className="annot-session-feedback">{sessionActionError}</p> : null}
         </div>
         <div className="row annot-actions">
-          <a className="button-link" href={originalCsvExportUrl}>
-            Download Original CSV
-          </a>
-          <a className="button-link primary" href={editedCsvExportUrl}>
-            Download Edited CSV
-          </a>
-          <button
-            className="danger"
-            onClick={() => void handleResetTimeline()}
-            disabled={resettingTimeline || deletingCurrentSession}
-          >
-            {resettingTimeline && <span className="spinner" aria-hidden="true" />}
-            {resettingTimeline ? "Resetting..." : "Reset to Original"}
-          </button>
-          <button
-            type="button"
-            className="danger"
-            onClick={() => void handleDeleteCurrentSession()}
-            disabled={deletingCurrentSession || savingTitle || saveState === "saving"}
-          >
-            {deletingCurrentSession && <span className="spinner" aria-hidden="true" />}
-            {deletingCurrentSession ? "Deleting..." : "Delete Session"}
-          </button>
-          <Link className="button-link" to="/">Back to Sessions</Link>
+          <div className="annot-action-group annot-action-group-downloads">
+            <a className="button-link" href={originalCsvExportUrl}>
+              Download Original CSV
+            </a>
+            <a className="button-link primary" href={editedCsvExportUrl}>
+              Download Edited CSV
+            </a>
+          </div>
+          <div className="annot-action-group annot-action-group-manage">
+            <Link className="button-link" to="/">Back to Sessions</Link>
+            <button
+              className="danger"
+              onClick={() => void handleResetTimeline()}
+              disabled={resettingTimeline || deletingCurrentSession}
+            >
+              {resettingTimeline && <span className="spinner" aria-hidden="true" />}
+              {resettingTimeline ? "Resetting..." : "Reset to Original"}
+            </button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() => void handleDeleteCurrentSession()}
+              disabled={deletingCurrentSession || savingTitle || saveState === "saving"}
+            >
+              {deletingCurrentSession && <span className="spinner" aria-hidden="true" />}
+              {deletingCurrentSession ? "Deleting..." : "Delete Session"}
+            </button>
+          </div>
         </div>
       </header>
 
       <main className="annot-layout">
-        <section className="video-panel card workspace-card">
+        <div className="video-side-stack">
+          <section className="video-panel card workspace-card">
           <div className="panel-heading">
-            <h2>Video</h2>
+            <div className="panel-title-group">
+              <h2>Video</h2>
+              {!selectedRowHasVideoCoverage && selectedAnchorFrame !== null && (
+                <span className="coverage-badge" title="The selected event frame is not covered by any uploaded video segment.">
+                  ⚠️ No video coverage for frame {selectedAnchorFrame}
+                </span>
+              )}
+              {activeVideoSegment && !activeVideoHasTiming && (
+                <button
+                  type="button"
+                  className="calibration-badge pulsate"
+                  onClick={scrollToCalibration}
+                  title="Click to scroll to timing calibration settings."
+                >
+                  ⚠️ Timing Calibration Required
+                </button>
+              )}
+            </div>
           </div>
           {videoUrl ? (
             <>
@@ -1770,8 +1800,12 @@ export function AnnotationPage() {
               <div className="frame-readout">
                 <div className="frame-readout-grid">
                   <div>
-                    <div className="frame-readout-label">Match Time</div>
-                    <div className="frame-readout-main">{absoluteTimestamp}</div>
+                    <div className="frame-readout-label">Period</div>
+                    <div className="frame-readout-main">{playbackPeriodId}</div>
+                  </div>
+                  <div>
+                    <div className="frame-readout-label">Timestamp</div>
+                    <div className="frame-readout-main">{currentTimestamp}</div>
                   </div>
                   <div>
                     <div className="frame-readout-label">Frame</div>
@@ -1779,58 +1813,44 @@ export function AnnotationPage() {
                   </div>
                 </div>
               </div>
-              <video
-                ref={videoRef}
-                src={videoUrl}
-                controls
-                onTimeUpdate={(e) => {
-                  syncDisplayedSegmentFrame(e.currentTarget);
-                }}
-                onSeeked={(e) => {
-                  const videoEl = e.currentTarget;
-                  window.requestAnimationFrame(() => {
-                    syncDisplayedSegmentFrame(videoEl);
-                  });
-                }}
-                onLoadedMetadata={(e) => {
-                  const videoEl = e.currentTarget;
-                  if (pendingSeekFrame !== null) {
-                    if (activeVideoSegment) {
-                      seekVideoToSegmentFrame(pendingSeekFrame - activeVideoSegment.start_frame, videoEl);
-                      setPendingSeekFrame(null);
-                      return;
+              <div className="video-viewport">
+                <video
+                  ref={videoRef}
+                  src={videoUrl}
+                  controls
+                  onTimeUpdate={(e) => {
+                    syncDisplayedSegmentFrame(e.currentTarget);
+                  }}
+                  onSeeked={(e) => {
+                    const videoEl = e.currentTarget;
+                    window.requestAnimationFrame(() => {
+                      syncDisplayedSegmentFrame(videoEl);
+                    });
+                  }}
+                  onLoadedMetadata={(e) => {
+                    const videoEl = e.currentTarget;
+                    if (pendingSeekFrame !== null) {
+                      if (activeVideoSegment) {
+                        seekVideoToSegmentFrame(pendingSeekFrame - activeVideoSegment.start_frame, videoEl);
+                        setPendingSeekFrame(null);
+                        return;
+                      }
                     }
-                  }
-                  syncDisplayedSegmentFrame(videoEl);
-                }}
-              />
-              <div className="video-segment-editor">
-                <label className={`video-segment-upload${uploadingSegment ? " is-disabled" : ""}`}>
-                  <span className="video-segment-upload-label">Replace or add video</span>
-                  <span className="video-segment-upload-control">
-                    <span className="video-segment-upload-button">Choose Video File</span>
-                    <input
-                      key={segmentUploadFile?.name ?? "video-segment-empty"}
-                      type="file"
-                      accept=".mp4,.mov,.m4v,.webm,video/*"
-                      onChange={(e) => setSegmentUploadFile(e.target.files?.[0] ?? null)}
-                      disabled={uploadingSegment}
-                    />
-                  </span>
-                  <span className="video-segment-upload-name">
-                    {segmentUploadFile?.name ?? "No file selected"}
-                  </span>
-                </label>
-                <button
-                  type="button"
-                  className="primary"
-                  onClick={() => void handleAddVideoSegment()}
-                  disabled={uploadingSegment}
-                >
-                  {uploadingSegment ? "Uploading..." : "Upload Video Segment"}
-                </button>
+                    syncDisplayedSegmentFrame(videoEl);
+                  }}
+                />
+                {activeVideoSegment && !activeVideoHasTiming && (
+                  <div className="video-block-overlay" onClick={scrollToCalibration}>
+                    <div className="overlay-content">
+                      <span className="overlay-icon">⏱️</span>
+                      <h3>Timing Calibration Required</h3>
+                      <p>Please calibrate the segment timing below to sync with events.</p>
+                      <button type="button" className="secondary">Go to Calibration</button>
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="video-timing-panel">
+              <div className="video-timing-panel" ref={timingCalibrationRef}>
                 <div className="video-timing-heading">
                   <div>
                     <h3>Timing Calibration</h3>
@@ -1845,42 +1865,44 @@ export function AnnotationPage() {
                     <span className="video-timing-chip">25 fps mapping</span>
                   </div>
                 </div>
-                <div className="video-timing-fields">
-                  <label>
-                    Period start frame
-                    <input
-                      type="number"
-                      min={0}
-                      value={segmentTimingPeriodStartFrame}
-                      onChange={(event) => setSegmentTimingPeriodStartFrame(event.target.value)}
-                      placeholder="e.g. 10000"
-                      disabled={savingSegmentTiming}
-                    />
-                  </label>
-                  <label>
-                    Video start time
-                    <input
-                      type="text"
-                      value={segmentTimingVideoStartTime}
-                      onChange={(event) => setSegmentTimingVideoStartTime(event.target.value)}
-                      placeholder="e.g. 00:10 or 10"
-                      disabled={savingSegmentTiming}
-                    />
-                  </label>
-                  <div className="video-timing-preview">
-                    <span className="video-timing-preview-label">Derived start frame</span>
-                    <strong>{pendingDerivedStartFrame?.toLocaleString("en-US") ?? "-"}</strong>
+                <div className="video-timing-layout">
+                  <div className="video-timing-fields">
+                    <label>
+                      Period start frame
+                      <input
+                        type="number"
+                        min={0}
+                        value={segmentTimingPeriodStartFrame}
+                        onChange={(event) => setSegmentTimingPeriodStartFrame(event.target.value)}
+                        placeholder="e.g. 10000"
+                        disabled={savingSegmentTiming}
+                      />
+                    </label>
+                    <label>
+                      Video start time
+                      <input
+                        type="text"
+                        value={segmentTimingVideoStartTime}
+                        onChange={(event) => setSegmentTimingVideoStartTime(event.target.value)}
+                        placeholder="e.g. 00:10 or 10"
+                        disabled={savingSegmentTiming}
+                      />
+                    </label>
+                    <div className="video-timing-preview">
+                      <span className="video-timing-preview-label">Derived start frame</span>
+                      <strong>{pendingDerivedStartFrame?.toLocaleString("en-US") ?? "-"}</strong>
+                    </div>
                   </div>
-                </div>
-                <div className="video-timing-actions">
-                  <button
-                    type="button"
-                    className="primary"
-                    onClick={() => void handleApplySegmentTiming()}
-                    disabled={savingSegmentTiming || !activeVideoSegment}
-                  >
-                    {savingSegmentTiming ? "Applying..." : "Apply Timing"}
-                  </button>
+                  <div className="video-timing-actions">
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => void handleApplySegmentTiming()}
+                      disabled={savingSegmentTiming || !activeVideoSegment}
+                    >
+                      {savingSegmentTiming ? "Applying..." : "Apply Timing"}
+                    </button>
+                  </div>
                 </div>
               </div>
               <div className="row controls-row">
@@ -1904,10 +1926,58 @@ export function AnnotationPage() {
                 <button onClick={() => jump(KEYBOARD_SEEK_SECONDS)}>+0.2s (Shift+→)</button>
               </div>
             </>
+          ) : isUploadSession ? (
+            <div className="video-empty-state">
+              <span className="panel-kicker">Video Pending</span>
+              <h3>Add the first video segment</h3>
+              <p className="muted">This session was created from CSV only, so the video panel is still empty.</p>
+              <p className="muted compact-note">Upload a segment below to enable frame scrubbing, timing calibration, and video-assisted review.</p>
+            </div>
           ) : (
             <p className="muted">No video available.</p>
           )}
         </section>
+
+        {showVideoUploader && (
+          <section className="video-uploader-panel card workspace-card">
+            <div className="panel-heading">
+              <div className="panel-title-group">
+                <h2>Add or Replace Video</h2>
+                <span className="meta-pill">{videoSegments.length} segments</span>
+              </div>
+            </div>
+            <div className="video-segment-editor">
+              <div className="upload-context">
+                <p className="muted compact-note">Select a video file to replace or add as a new segment.</p>
+              </div>
+              <div className="upload-controls-group">
+                <label className={`video-segment-upload${uploadingSegment ? " is-disabled" : ""}`}>
+                  <span className="video-segment-upload-control">
+                    <span className={`video-segment-upload-button${segmentUploadFile ? " has-file" : ""}`}>
+                      {segmentUploadFile ? `📄 ${segmentUploadFile.name}` : "Choose Video File"}
+                    </span>
+                    <input
+                      key={segmentUploadFile?.name ?? "video-segment-empty"}
+                      type="file"
+                      accept=".mp4,.mov,.m4v,.webm,video/*"
+                      onChange={(event) => setSegmentUploadFile(event.target.files?.[0] ?? null)}
+                      disabled={uploadingSegment}
+                    />
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => void handleAddVideoSegment()}
+                  disabled={uploadingSegment || !segmentUploadFile}
+                >
+                  {uploadingSegment ? "Uploading..." : "Upload"}
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+      </div>
 
         <div className="editor-stack">
           <section className="timeline-panel card workspace-card">
@@ -1929,11 +1999,11 @@ export function AnnotationPage() {
             </div>
             <div className="timeline-hud">
               <div className="timeline-hud-item">
-                <div className="timeline-hud-label">Playhead</div>
+                <div className="timeline-hud-label">Frame</div>
                 <div className="timeline-hud-value">{currentFrame}</div>
               </div>
               <div className="timeline-hud-item">
-                <div className="timeline-hud-label">Selected</div>
+                <div className="timeline-hud-label">Selected Frame</div>
                 <div className="timeline-hud-value">{selectedAnchorFrame ?? "-"}</div>
               </div>
               <div
@@ -1957,6 +2027,7 @@ export function AnnotationPage() {
               rows={events}
               selectedIndex={selectedIndex}
               currentFrame={currentFrame}
+              selectedRowHasVideoCoverage={selectedRowHasVideoCoverage}
               onSelect={handleSelectEvent}
             />
           </section>
@@ -2141,33 +2212,50 @@ export function AnnotationPage() {
             )}
           </section>
 
-          {(warnings.length > 0 || saveMessage) && (
+          {hasReviewInsights && (
             <section className="review-panel card workspace-card">
-              {warnings.length > 0 && (
-                <>
-                  <h3>Warnings</h3>
-                  <ul>
-                    {warningItems.map((item) => {
-                      if (item.frameId !== null) {
-                        const frameId = item.frameId;
-                        return (
-                          <li key={item.key} className="warning-item">
-                            <button
-                              type="button"
-                              className="warning-frame-link"
-                              onClick={() => jumpToWarningFrame(frameId)}
-                            >
-                              Frame {frameId}
-                            </button>
-                            <span>{item.body}</span>
-                          </li>
-                        );
-                      }
-                      return <li key={item.key} className="warning-item">{item.text}</li>;
-                    })}
-                  </ul>
-                </>
+              {qaFlags.length > 0 && (
+                <div className="review-block">
+                  <div className="review-block-header">
+                    <div>
+                      <h3>QA Flags</h3>
+                      <p className="muted">Focused checks that may need manual review.</p>
+                    </div>
+                  </div>
+                  <div className="review-summary-list">
+                    {qaFlags.map((flag) => (
+                      <article key={flag.code} className="review-summary-card review-summary-card-qa">
+                        <div className="review-summary-head">
+                          <h4>{flag.title}</h4>
+                          <span className="review-summary-count">{flag.count}</span>
+                        </div>
+                        <p className="muted review-summary-copy">{flag.summary}</p>
+                        {flag.sample_frame_ids.length > 0 && (
+                          <div className="review-summary-actions">
+                            {flag.sample_frame_ids.map((frameId) => (
+                              <button
+                                key={`${flag.code}-${frameId}`}
+                                type="button"
+                                className="review-link-chip"
+                                onClick={() => jumpToWarningFrame(frameId)}
+                              >
+                                Frame {frameId}
+                              </button>
+                            ))}
+                            {flag.count > flag.sample_frame_ids.length && (
+                              <span className="review-summary-more muted">
+                                +{flag.count - flag.sample_frame_ids.length} more
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </article>
+                    ))}
+                  </div>
+                </div>
               )}
+
+
 
               {saveMessage && (
                 <p className={`save-feedback ${saveState === "error" ? "error-text" : "muted"}`}>{saveMessage}</p>

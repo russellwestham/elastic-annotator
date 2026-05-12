@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -19,7 +20,9 @@ from backend.app.schemas.api import (
     EventListResponse,
     EventSaveRequest,
     EventSaveResponse,
+    ImportNoteSummary,
     MatchSummary,
+    QAFlagSummary,
     SessionCreateRequest,
     SessionDeleteResponse,
     SessionMetadataUpdateRequest,
@@ -36,6 +39,15 @@ pipeline = ElasticPipelineService(settings, store)
 upload_sessions = UploadSessionService(store)
 
 router = APIRouter(prefix="/api", tags=["api"])
+
+ROW_IMPORT_NOTE_PATTERN = re.compile(r"^row\s+(?P<row>\d+):\s*(?P<body>.+)$")
+MISSING_ID_IMPORT_NOTE_PATTERN = re.compile(r"^row\s+\d+:\s*missing id, generated\s+", re.IGNORECASE)
+
+
+def _pluralize(count: int, singular: str, plural: str | None = None) -> str:
+    if count == 1:
+        return singular
+    return plural or f"{singular}s"
 
 
 def _spawn_session_build(session_id: str) -> None:
@@ -126,6 +138,10 @@ def _session_has_video_artifact(metadata: dict) -> bool:
 
 def _ready_integrity_reasons(metadata: dict) -> list[str]:
     reasons: list[str] = []
+    session_id = str(metadata.get("session_id") or "").strip()
+    normalized_segments = metadata.get("video_segments") or upload_sessions.normalize_video_segments(session_id, metadata)
+    if metadata.get("session_mode") == "upload_csv" and not normalized_segments:
+        return reasons
     if not _session_has_video_artifact(metadata):
         reasons.append("video_not_prepared")
     return reasons
@@ -190,10 +206,132 @@ def _normalize_session_integrity(metadata: dict) -> dict:
     return normalized
 
 
-def _collect_validation_warnings(metadata: dict, events: list[dict]) -> list[str]:
+def _build_import_note_summary(code: str, body: str, count: int) -> tuple[str, str]:
+    row_word = _pluralize(count, "row")
+    verb = "was" if count == 1 else "were"
+
+    if code == "skipped_missing_required_fields":
+        return (
+            "Skipped Rows Missing Required Fields",
+            f"{count} {row_word} {verb} skipped because spadl_type or player_id was missing.",
+        )
+    if code == "invalid_synced_ts":
+        return (
+            "Invalid synced_ts Values",
+            f"{count} {row_word} had invalid synced_ts values, so those timestamps were ignored.",
+        )
+    if code == "skipped_missing_sync_anchor":
+        return (
+            "Skipped Rows Missing Sync Anchor",
+            f"{count} {row_word} {verb} skipped because both synced_frame_id and synced_ts were missing.",
+        )
+    if code == "invalid_receive_ts":
+        return (
+            "Invalid receive_ts Values",
+            f"{count} {row_word} had invalid receive_ts values, so those timestamps were ignored.",
+        )
+    if code == "invalid_period_id":
+        return (
+            "Invalid period_id Values",
+            f"{count} {row_word} had invalid period_id values and defaulted to 1.",
+        )
+    if code == "invalid_outcome":
+        return (
+            "Invalid outcome Values",
+            f"{count} {row_word} had invalid outcome values and defaulted to TRUE.",
+        )
+    if code == "unknown_error_type":
+        return (
+            "Unknown error_type Values",
+            f"{count} {row_word} had unknown error_type values, so they were cleared.",
+        )
+    return (
+        "Import Note",
+        body if count == 1 else f"{count} similar import notes: {body}",
+    )
+
+
+def _classify_import_note(body: str) -> str:
+    if body == "skipped because spadl_type/player_id is missing":
+        return "skipped_missing_required_fields"
+    if body.startswith("invalid synced_ts "):
+        return "invalid_synced_ts"
+    if body == "skipped because synced_frame_id/synced_ts is missing":
+        return "skipped_missing_sync_anchor"
+    if body.startswith("invalid receive_ts "):
+        return "invalid_receive_ts"
+    if body.startswith("invalid period_id "):
+        return "invalid_period_id"
+    if body.startswith("invalid outcome "):
+        return "invalid_outcome"
+    if body.startswith("unknown error_type "):
+        return "unknown_error_type"
+    return "import_note"
+
+
+def _collect_import_notes(metadata: dict) -> list[ImportNoteSummary]:
     stored = metadata.get("validation_warnings") or []
-    dynamic = pipeline.validate_events(events)
-    return [str(item) for item in [*stored, *dynamic] if str(item).strip()]
+    grouped: dict[str, dict[str, object]] = {}
+
+    for item in stored:
+        text = str(item).strip()
+        if not text or MISSING_ID_IMPORT_NOTE_PATTERN.match(text):
+            continue
+
+        row_number: int | None = None
+        body = text
+        matched = ROW_IMPORT_NOTE_PATTERN.match(text)
+        if matched:
+            row_number = int(matched.group("row"))
+            body = matched.group("body").strip()
+
+        code = _classify_import_note(body)
+        bucket = grouped.setdefault(
+            f"{code}:{body}",
+            {"code": code, "body": body, "count": 0, "sample_rows": []},
+        )
+        bucket["count"] = int(bucket["count"]) + 1
+        if row_number is not None:
+            sample_rows = bucket["sample_rows"]
+            if isinstance(sample_rows, list) and row_number not in sample_rows and len(sample_rows) < 5:
+                sample_rows.append(row_number)
+
+    summaries: list[ImportNoteSummary] = []
+    for bucket in grouped.values():
+        code = str(bucket["code"])
+        body = str(bucket["body"])
+        count = int(bucket["count"])
+        sample_rows = list(bucket["sample_rows"]) if isinstance(bucket["sample_rows"], list) else []
+        title, summary = _build_import_note_summary(code, body, count)
+        summaries.append(
+            ImportNoteSummary(
+                code=code,
+                title=title,
+                summary=summary,
+                count=count,
+                sample_rows=sample_rows,
+            )
+        )
+
+    summaries.sort(key=lambda item: (-item.count, item.title))
+    return summaries
+
+
+def _collect_qa_flags(events: list[dict]) -> list[QAFlagSummary]:
+    return [QAFlagSummary(**flag) for flag in pipeline.summarize_qa_flags(events)]
+
+
+def _collect_review_feedback(
+    metadata: dict,
+    events: list[dict],
+) -> tuple[list[str], list[ImportNoteSummary], list[QAFlagSummary]]:
+    import_notes = _collect_import_notes(metadata)
+    qa_flags = _collect_qa_flags(events)
+    validation_warnings = [
+        *[item.summary for item in import_notes],
+        *[item.summary for item in qa_flags],
+    ]
+    return validation_warnings, import_notes, qa_flags
 
 
 @router.get("/health")
@@ -257,18 +395,14 @@ def create_session(request: SessionCreateRequest) -> SessionStatusResponse:
     responses={400: {"model": ErrorResponse}},
 )
 def create_upload_session(
-    video_file: UploadFile = File(...),
     csv_file: UploadFile = File(...),
     persist: bool = Form(default=False),
     session_name: str | None = Form(default=None),
-    video_start_frame: int | None = Form(default=None),
 ) -> SessionStatusResponse:
     metadata = upload_sessions.create_upload_session(
-        video_file=video_file,
         csv_file=csv_file,
         persist=persist,
         session_name=session_name,
-        video_start_frame=video_start_frame,
     )
     metadata = _normalize_session_integrity(metadata)
     return _to_status_response(metadata)
@@ -498,8 +632,14 @@ def get_events(
     else:
         events = store.load_events(session_id)
 
-    warnings = _collect_validation_warnings(metadata, events)
-    return EventListResponse(session_id=session_id, events=events, validation_warnings=warnings)
+    warnings, import_notes, qa_flags = _collect_review_feedback(metadata, events)
+    return EventListResponse(
+        session_id=session_id,
+        events=events,
+        validation_warnings=warnings,
+        import_notes=import_notes,
+        qa_flags=qa_flags,
+    )
 
 
 @router.put("/sessions/{session_id}/events", response_model=EventSaveResponse)
@@ -510,7 +650,7 @@ def save_events(session_id: str, request: EventSaveRequest) -> EventSaveResponse
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     events = [event.model_dump() for event in request.events]
-    warnings = _collect_validation_warnings(metadata, events)
+    warnings, import_notes, qa_flags = _collect_review_feedback(metadata, events)
     store.save_events(session_id, events)
     store.update_metadata(session_id, event_count=len(events), progress="autosaved")
 
@@ -518,6 +658,8 @@ def save_events(session_id: str, request: EventSaveRequest) -> EventSaveResponse
         ok=True,
         saved_count=len(events),
         validation_warnings=warnings,
+        import_notes=import_notes,
+        qa_flags=qa_flags,
     )
 
 
@@ -533,12 +675,14 @@ def reset_events(session_id: str) -> dict[str, object]:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    warnings = _collect_validation_warnings(metadata, events)
+    warnings, import_notes, qa_flags = _collect_review_feedback(metadata, events)
     return {
         "ok": True,
         "restored_count": len(events),
         "source": source,
         "validation_warnings": warnings,
+        "import_notes": [item.model_dump() for item in import_notes],
+        "qa_flags": [item.model_dump() for item in qa_flags],
     }
 
 

@@ -6,6 +6,7 @@ interface EventTableProps {
   rows: EventRow[];
   selectedIndex: number;
   currentFrame: number;
+  selectedRowHasVideoCoverage: boolean;
   onSelect: (index: number) => void;
 }
 
@@ -15,7 +16,13 @@ function getAnchorFrame(row: EventRow): number | null {
   return null;
 }
 
-export function EventTable({ rows, selectedIndex, currentFrame, onSelect }: EventTableProps) {
+export function EventTable({
+  rows,
+  selectedIndex,
+  currentFrame,
+  selectedRowHasVideoCoverage,
+  onSelect,
+}: EventTableProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const headerRef = useRef<HTMLTableSectionElement | null>(null);
   const rowRefs = useRef<Array<HTMLTableRowElement | null>>([]);
@@ -68,6 +75,7 @@ export function EventTable({ rows, selectedIndex, currentFrame, onSelect }: Even
                 }}
                 className={[
                   index === selectedIndex ? "selected" : "",
+                  index === selectedIndex && !selectedRowHasVideoCoverage ? "selected-uncovered" : "",
                   isFrameMatch ? "frame-match" : "",
                   isFrameNear ? "frame-near" : "",
                 ]

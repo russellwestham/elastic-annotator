@@ -74,8 +74,26 @@ export interface EventRow {
   note: string;
 }
 
+export interface ImportNoteSummary {
+  code: string;
+  title: string;
+  summary: string;
+  count: number;
+  sample_rows: number[];
+}
+
+export interface QAFlagSummary {
+  code: string;
+  title: string;
+  summary: string;
+  count: number;
+  sample_frame_ids: number[];
+}
+
 export interface EventListResponse {
   session_id: string;
   events: EventRow[];
   validation_warnings: string[];
+  import_notes: ImportNoteSummary[];
+  qa_flags: QAFlagSummary[];
 }

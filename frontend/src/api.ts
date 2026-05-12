@@ -2,6 +2,8 @@ import type {
   DefaultDatasetRoot,
   EventListResponse,
   EventRow,
+  ImportNoteSummary,
+  QAFlagSummary,
   MatchSummary,
   SessionStatus,
 } from "./types";
@@ -122,6 +124,8 @@ export async function saveEvents(sessionId: string, events: EventRow[]): Promise
   ok: boolean;
   saved_count: number;
   validation_warnings: string[];
+  import_notes: ImportNoteSummary[];
+  qa_flags: QAFlagSummary[];
 }> {
   return request(`/api/sessions/${sessionId}/events`, {
     method: "PUT",
@@ -134,6 +138,8 @@ export async function resetEvents(sessionId: string): Promise<{
   restored_count: number;
   source: "snapshot" | "recomputed";
   validation_warnings: string[];
+  import_notes: ImportNoteSummary[];
+  qa_flags: QAFlagSummary[];
 }> {
   return request(`/api/sessions/${sessionId}/reset-events`, {
     method: "POST",
@@ -158,22 +164,16 @@ export async function deleteSession(sessionId: string): Promise<{ ok: boolean; s
 }
 
 export async function createUploadSession(payload: {
-  videoFile: File;
   csvFile: File;
   persist: boolean;
   sessionName?: string;
-  videoStartFrame?: number;
 }): Promise<SessionStatus> {
   const formData = new FormData();
-  formData.append("video_file", payload.videoFile);
   formData.append("csv_file", payload.csvFile);
   formData.append("persist", String(payload.persist));
   const normalizedSessionName = payload.sessionName?.trim() || payload.csvFile.name?.trim();
   if (normalizedSessionName) {
     formData.append("session_name", normalizedSessionName);
-  }
-  if (typeof payload.videoStartFrame === "number" && Number.isFinite(payload.videoStartFrame)) {
-    formData.append("video_start_frame", String(Math.round(payload.videoStartFrame)));
   }
 
   const response = await fetch(`${API_BASE}/api/upload-sessions`, {
