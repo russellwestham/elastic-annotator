@@ -81,8 +81,12 @@ export async function fetchSessions(params?: {
   return request<SessionStatus[]>(`/api/sessions${suffix}`);
 }
 
-export async function fetchEvents(sessionId: string): Promise<EventListResponse> {
-  return request<EventListResponse>(`/api/sessions/${sessionId}/events`);
+export async function fetchEvents(
+  sessionId: string,
+  variant: "current" | "initial" = "current",
+): Promise<EventListResponse> {
+  const qs = variant === "initial" ? "?variant=initial" : "";
+  return request<EventListResponse>(`/api/sessions/${sessionId}/events${qs}`);
 }
 
 function sessionPriority(session: SessionStatus): number {
@@ -154,22 +158,16 @@ export async function deleteSession(sessionId: string): Promise<{ ok: boolean; s
 }
 
 export async function createUploadSession(payload: {
-  videoFile: File;
   csvFile: File;
   persist: boolean;
   sessionName?: string;
-  videoStartFrame?: number;
 }): Promise<SessionStatus> {
   const formData = new FormData();
-  formData.append("video_file", payload.videoFile);
   formData.append("csv_file", payload.csvFile);
   formData.append("persist", String(payload.persist));
   const normalizedSessionName = payload.sessionName?.trim() || payload.csvFile.name?.trim();
   if (normalizedSessionName) {
     formData.append("session_name", normalizedSessionName);
-  }
-  if (typeof payload.videoStartFrame === "number" && Number.isFinite(payload.videoStartFrame)) {
-    formData.append("video_start_frame", String(Math.round(payload.videoStartFrame)));
   }
 
   const response = await fetch(`${API_BASE}/api/upload-sessions`, {
@@ -192,7 +190,7 @@ export async function addSessionVideo(payload: {
 }): Promise<SessionStatus> {
   const formData = new FormData();
   formData.append("video_file", payload.videoFile);
-  formData.append("start_frame", String(Math.round(payload.startFrame)));
+  formData.append("start_frame", String(payload.startFrame));
 
   const response = await fetch(`${API_BASE}/api/sessions/${encodeURIComponent(payload.sessionId)}/videos`, {
     method: "POST",
@@ -205,6 +203,24 @@ export async function addSessionVideo(payload: {
   }
 
   return response.json() as Promise<SessionStatus>;
+}
+
+export async function updateSessionVideoTiming(payload: {
+  sessionId: string;
+  segmentId: string;
+  periodStartFrame: number;
+  videoStartTimeSeconds: number;
+}): Promise<SessionStatus> {
+  return request<SessionStatus>(
+    `/api/sessions/${encodeURIComponent(payload.sessionId)}/videos/${encodeURIComponent(payload.segmentId)}/timing`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        period_start_frame: Math.round(payload.periodStartFrame),
+        video_start_time_seconds: payload.videoStartTimeSeconds,
+      }),
+    },
+  );
 }
 
 export async function uploadDataset(file: File): Promise<{ dataset_root: string }> {

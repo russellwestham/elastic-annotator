@@ -61,11 +61,11 @@ class ElasticPipelineService:
         return matches
 
     def build_session(self, session_id: str) -> None:
-        metadata = self.store.load_metadata(session_id)
-        dataset_root = Path(metadata["dataset_root"]).expanduser()
-        match_id = metadata["match_id"]
-
         try:
+            metadata = self.store.load_metadata(session_id)
+            dataset_root = Path(metadata["dataset_root"]).expanduser()
+            match_id = metadata["match_id"]
+
             if metadata.get("generate_video", True):
                 self.store.update_metadata(session_id, status="processing", progress="checking_cached_session")
                 cached_snapshot = self._reuse_public_session_snapshot_if_available(
@@ -238,14 +238,20 @@ class ElasticPipelineService:
                 video_urls=video_urls,
             )
 
+        except FileNotFoundError:
+            logger.info("Session %s was deleted while processing; stopping worker", session_id)
+            return
         except Exception as exc:
             logger.exception("Failed to build session %s", session_id)
-            self.store.update_metadata(
-                session_id,
-                status="error",
-                progress="failed",
-                error_message=f"{exc}\n{traceback.format_exc(limit=5)}",
-            )
+            try:
+                self.store.update_metadata(
+                    session_id,
+                    status="error",
+                    progress="failed",
+                    error_message=f"{exc}\n{traceback.format_exc(limit=5)}",
+                )
+            except FileNotFoundError:
+                logger.info("Session %s was deleted after a worker failure; skipping error update", session_id)
 
     def reset_events_to_initial(self, session_id: str) -> tuple[list[dict], str]:
         metadata = self.store.load_metadata(session_id)

@@ -24,6 +24,9 @@ export interface VideoSegment {
   url: string;
   original_filename?: string | null;
   start_frame: number;
+  period_start_frame?: number | null;
+  video_start_time_seconds?: number | null;
+  timing_confirmed: boolean;
   frame_count?: number | null;
   duration_seconds?: number | null;
   fps?: number | null;

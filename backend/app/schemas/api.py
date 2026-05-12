@@ -60,6 +60,9 @@ class VideoSegmentResponse(BaseModel):
     url: str
     original_filename: str | None = None
     start_frame: int = Field(ge=0)
+    period_start_frame: int | None = Field(default=None, ge=0)
+    video_start_time_seconds: float | None = Field(default=None, ge=0)
+    timing_confirmed: bool = False
     frame_count: int | None = Field(default=None, ge=1)
     duration_seconds: float | None = Field(default=None, ge=0)
     fps: float | None = Field(default=None, gt=0)
@@ -95,6 +98,11 @@ class SessionStatusResponse(BaseModel):
 class SessionMetadataUpdateRequest(BaseModel):
     video_start_frame: int | None = Field(default=None, ge=0)
     title: str | None = Field(default=None, max_length=200)
+
+
+class VideoSegmentTimingUpdateRequest(BaseModel):
+    period_start_frame: int = Field(ge=0)
+    video_start_time_seconds: float = Field(ge=0)
 
 
 class SessionDeleteResponse(BaseModel):

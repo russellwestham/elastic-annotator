@@ -178,6 +178,7 @@ function buildLegacyVideoSegments(session: SessionStatus | null): VideoSegment[]
       url,
       original_filename: index === 0 ? session.original_video_filename ?? null : null,
       start_frame: Number.isFinite(startFrame) ? startFrame : 0,
+      timing_confirmed: false,
       frame_count: frameCount,
       duration_seconds: index === 0 ? session.video_duration_seconds ?? null : null,
       fps: session.fps ?? null,
@@ -1655,43 +1656,6 @@ export function AnnotationPage() {
                   syncDisplayedSegmentFrame(videoEl);
                 }}
               />
-              <div className="video-segment-editor">
-                <label className={`video-segment-upload${uploadingSegment ? " is-disabled" : ""}`}>
-                  <span className="video-segment-upload-label">Replace or add video</span>
-                  <span className="video-segment-upload-control">
-                    <span className="video-segment-upload-button">Choose Video File</span>
-                    <input
-                      key={segmentUploadFile?.name ?? "video-segment-empty"}
-                      type="file"
-                      accept=".mp4,.mov,.m4v,.webm,video/*"
-                      onChange={(e) => setSegmentUploadFile(e.target.files?.[0] ?? null)}
-                      disabled={uploadingSegment}
-                    />
-                  </span>
-                  <span className="video-segment-upload-name">
-                    {segmentUploadFile?.name ?? "No file selected"}
-                  </span>
-                </label>
-                <label className="video-segment-start-field">
-                  Start frame
-                  <input
-                    type="number"
-                    min={0}
-                    value={segmentUploadStartFrame}
-                    onChange={(e) => setSegmentUploadStartFrame(e.target.value)}
-                    placeholder="e.g. 25000"
-                    disabled={uploadingSegment}
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="primary"
-                  onClick={() => void handleAddVideoSegment()}
-                  disabled={uploadingSegment}
-                >
-                  {uploadingSegment ? "Uploading..." : "Upload Video Segment"}
-                </button>
-              </div>
               <div className="row controls-row">
                 <button onClick={() => jump(-5)}>-5s</button>
                 <button
@@ -1714,8 +1678,49 @@ export function AnnotationPage() {
               </div>
             </>
           ) : (
-            <p className="muted">No video available.</p>
+            <div className="empty-video-state" style={{ padding: "2rem", textAlign: "center" }}>
+              <p className="muted" style={{ marginBottom: "1.5rem" }}>
+                No video available. Please upload a video segment below to start annotating.
+              </p>
+            </div>
           )}
+          <div className="video-segment-editor" style={{ marginTop: "1rem" }}>
+            <label className={`video-segment-upload${uploadingSegment ? " is-disabled" : ""}`}>
+              <span className="video-segment-upload-label">Replace or add video</span>
+              <span className="video-segment-upload-control">
+                <span className="video-segment-upload-button">Choose Video File</span>
+                <input
+                  key={segmentUploadFile?.name ?? "video-segment-empty"}
+                  type="file"
+                  accept=".mp4,.mov,.m4v,.webm,video/*"
+                  onChange={(e) => setSegmentUploadFile(e.target.files?.[0] ?? null)}
+                  disabled={uploadingSegment}
+                />
+              </span>
+              <span className="video-segment-upload-name">
+                {segmentUploadFile?.name ?? "No file selected"}
+              </span>
+            </label>
+            <label className="video-segment-start-field">
+              Start frame
+              <input
+                type="number"
+                min={0}
+                value={segmentUploadStartFrame}
+                onChange={(e) => setSegmentUploadStartFrame(e.target.value)}
+                placeholder="e.g. 25000"
+                disabled={uploadingSegment}
+              />
+            </label>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => void handleAddVideoSegment()}
+              disabled={uploadingSegment}
+            >
+              {uploadingSegment ? "Uploading..." : "Upload Video Segment"}
+            </button>
+          </div>
         </section>
 
         <div className="editor-stack">

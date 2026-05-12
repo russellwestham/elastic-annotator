@@ -24,6 +24,7 @@ from backend.app.schemas.api import (
     SessionDeleteResponse,
     SessionMetadataUpdateRequest,
     SessionStatusResponse,
+    VideoSegmentTimingUpdateRequest,
 )
 from backend.app.services.elastic_pipeline import ElasticPipelineService
 from backend.app.services.session_store import SessionStore
@@ -256,18 +257,14 @@ def create_session(request: SessionCreateRequest) -> SessionStatusResponse:
     responses={400: {"model": ErrorResponse}},
 )
 def create_upload_session(
-    video_file: UploadFile = File(...),
     csv_file: UploadFile = File(...),
     persist: bool = Form(default=False),
     session_name: str | None = Form(default=None),
-    video_start_frame: int | None = Form(default=None),
 ) -> SessionStatusResponse:
     metadata = upload_sessions.create_upload_session(
-        video_file=video_file,
         csv_file=csv_file,
         persist=persist,
         session_name=session_name,
-        video_start_frame=video_start_frame,
     )
     metadata = _normalize_session_integrity(metadata)
     return _to_status_response(metadata)
@@ -334,9 +331,9 @@ def update_session_metadata(
 def add_session_video(
     session_id: str,
     video_file: UploadFile = File(...),
-    start_frame: int = Form(...),
+    start_frame: int | None = Form(default=None),
 ) -> SessionStatusResponse:
-    if start_frame < 0:
+    if start_frame is not None and start_frame < 0:
         raise HTTPException(status_code=400, detail="start_frame must be non-negative")
 
     try:
@@ -360,8 +357,12 @@ def add_session_video(
     return _to_status_response(updated)
 
 
-@router.delete("/sessions/{session_id}", response_model=SessionDeleteResponse)
-def delete_session(session_id: str) -> SessionDeleteResponse:
+@router.patch("/sessions/{session_id}/videos/{segment_id}/timing", response_model=SessionStatusResponse)
+def update_session_video_timing(
+    session_id: str,
+    segment_id: str,
+    request: VideoSegmentTimingUpdateRequest,
+) -> SessionStatusResponse:
     try:
         metadata = store.load_metadata(session_id)
     except FileNotFoundError as exc:
@@ -370,8 +371,26 @@ def delete_session(session_id: str) -> SessionDeleteResponse:
     if metadata.get("status") == "processing":
         raise HTTPException(
             status_code=409,
-            detail="Cannot delete a processing session. Wait for completion or stop the worker first.",
+            detail="Cannot update video timing while the session is still processing.",
         )
+
+    updated = upload_sessions.update_video_segment_timing(
+        session_id=session_id,
+        metadata=metadata,
+        segment_id=segment_id,
+        period_start_frame=request.period_start_frame,
+        video_start_time_seconds=request.video_start_time_seconds,
+    )
+    updated = _normalize_session_integrity(updated)
+    return _to_status_response(updated)
+
+
+@router.delete("/sessions/{session_id}", response_model=SessionDeleteResponse)
+def delete_session(session_id: str) -> SessionDeleteResponse:
+    try:
+        store.load_metadata(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     deleted = store.delete_session(session_id)
     if not deleted:
@@ -453,12 +472,27 @@ def resume_session(session_id: str, force: bool = Query(default=False)) -> Sessi
 
 
 @router.get("/sessions/{session_id}/events", response_model=EventListResponse)
-def get_events(session_id: str) -> EventListResponse:
+def get_events(
+    session_id: str,
+    variant: str = Query(default="current"),
+) -> EventListResponse:
+    if variant not in {"current", "initial"}:
+        raise HTTPException(status_code=400, detail="variant must be one of: current, initial")
+
     try:
         metadata = store.load_metadata(session_id)
-        events = store.load_events(session_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if variant == "initial":
+        try:
+            events = store.load_initial_events(session_id)
+        except FileNotFoundError:
+            events = store.load_events(session_id)
+        if not events:
+            events = store.load_events(session_id)
+    else:
+        events = store.load_events(session_id)
 
     warnings = _collect_validation_warnings(metadata, events)
     return EventListResponse(session_id=session_id, events=events, validation_warnings=warnings)
