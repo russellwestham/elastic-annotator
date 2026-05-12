@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import {
   addSessionVideo,
   buildArtifactUrl,
   buildSessionCsvExportUrl,
+  deleteSession,
   fetchEvents,
   fetchLatestSessionForMatch,
   fetchSession,
   fetchSpadlTypes,
   resetEvents,
   saveEvents,
+  updateSessionMetadata,
 } from "../api";
 import { EventTable } from "../components/EventTable";
 import type { ErrorType, EventRow, SessionStatus, VideoSegment } from "../types";
@@ -253,6 +255,16 @@ function frameToEventTimestamp(frameId: number, fps: number, offsetSeconds: numb
   return formatSeconds(seconds);
 }
 
+function getSessionTitle(session: SessionStatus | null | undefined): string {
+  return (
+    session?.session_name?.trim()
+    || session?.original_video_filename?.trim()
+    || session?.match_id?.trim()
+    || session?.session_id
+    || "Session"
+  );
+}
+
 function getAnchorFrame(row: EventRow | null | undefined): number | null {
   if (!row) return null;
   if (typeof row.synced_frame_id === "number") return row.synced_frame_id;
@@ -414,6 +426,7 @@ function normalizeMissingRowsByFrame(rows: EventRow[], fps: number): { rows: Eve
 }
 
 export function AnnotationPage() {
+  const navigate = useNavigate();
   const { sessionId: routeSessionId = "", matchId = "" } = useParams();
   const [sessionId, setSessionId] = useState(routeSessionId);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -440,6 +453,11 @@ export function AnnotationPage() {
   const [segmentUploadFile, setSegmentUploadFile] = useState<File | null>(null);
   const [segmentUploadStartFrame, setSegmentUploadStartFrame] = useState("");
   const [uploadingSegment, setUploadingSegment] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [editingTitleValue, setEditingTitleValue] = useState("");
+  const [savingTitle, setSavingTitle] = useState(false);
+  const [deletingCurrentSession, setDeletingCurrentSession] = useState(false);
+  const [sessionActionError, setSessionActionError] = useState<string | null>(null);
 
   const selectedRow = events[selectedIndex] ?? null;
   const fps = session?.fps ?? 25;
@@ -585,7 +603,7 @@ export function AnnotationPage() {
       : saveState === "error"
         ? "Save failed"
         : "Ready";
-  const sessionLabel = session?.session_name?.trim() || session?.match_id || "Session";
+  const sessionLabel = getSessionTitle(session);
   const originalCsvExportUrl = sessionId ? buildSessionCsvExportUrl(sessionId, "initial") : "";
   const editedCsvExportUrl = sessionId ? buildSessionCsvExportUrl(sessionId, "current") : "";
   const getTimestampOffsetForPeriod = useCallback((periodId: number | null | undefined, nearFrame?: number): number => {
@@ -1174,6 +1192,64 @@ export function AnnotationPage() {
     }
   };
 
+  const beginTitleEdit = () => {
+    if (!session) {
+      return;
+    }
+    setEditingTitleValue(getSessionTitle(session));
+    setEditingTitle(true);
+    setSessionActionError(null);
+  };
+
+  const cancelTitleEdit = () => {
+    setEditingTitle(false);
+    setEditingTitleValue("");
+    setSessionActionError(null);
+  };
+
+  const saveTitleEdit = async () => {
+    if (!sessionId || !session) {
+      return;
+    }
+
+    setSavingTitle(true);
+    setSessionActionError(null);
+    try {
+      const updated = await updateSessionMetadata(sessionId, { title: editingTitleValue });
+      setSession(updated);
+      setEditingTitle(false);
+      setEditingTitleValue("");
+    } catch (err) {
+      setSessionActionError((err as Error).message);
+    } finally {
+      setSavingTitle(false);
+    }
+  };
+
+  const handleDeleteCurrentSession = async () => {
+    if (!sessionId || !session) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete session "${sessionLabel}" (${session.session_id})?\n\nThis will permanently remove the entire session.${dirty ? "\n\nUnsaved editor changes will be lost." : ""}`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingCurrentSession(true);
+    setSessionActionError(null);
+    try {
+      await deleteSession(sessionId);
+      navigate("/", { replace: true });
+    } catch (err) {
+      setSessionActionError((err as Error).message);
+    } finally {
+      setDeletingCurrentSession(false);
+    }
+  };
+
   const seekToAbsoluteFrame = (absoluteFrame: number) => {
     if (!Number.isFinite(absoluteFrame)) {
       return;
@@ -1431,7 +1507,54 @@ export function AnnotationPage() {
     <div className="page page-annotate">
       <header className="annot-header">
         <div className="annot-title-group">
-          <h1>{sessionLabel}</h1>
+          {editingTitle ? (
+            <div className="annot-title-editor">
+              <input
+                value={editingTitleValue}
+                onChange={(event) => setEditingTitleValue(event.target.value)}
+                placeholder={sessionLabel}
+                disabled={savingTitle || deletingCurrentSession}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void saveTitleEdit();
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    cancelTitleEdit();
+                  }
+                }}
+              />
+              <div className="session-title-actions">
+                <button
+                  type="button"
+                  onClick={() => void saveTitleEdit()}
+                  disabled={savingTitle || deletingCurrentSession}
+                >
+                  {savingTitle ? "Saving..." : "Save Title"}
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelTitleEdit}
+                  disabled={savingTitle || deletingCurrentSession}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="annot-title-display">
+              <h1>{sessionLabel}</h1>
+              <button
+                type="button"
+                className="session-title-edit-button"
+                onClick={beginTitleEdit}
+                disabled={savingTitle || deletingCurrentSession}
+              >
+                Edit Title
+              </button>
+            </div>
+          )}
           <div className="annot-meta">
             <span className="meta-pill">{fps} fps</span>
             <span className="meta-pill">{events.length} rows</span>
@@ -1443,6 +1566,7 @@ export function AnnotationPage() {
               {saveStateLabel}
             </span>
           </div>
+          {sessionActionError ? <p className="annot-session-feedback">{sessionActionError}</p> : null}
         </div>
         <div className="row annot-actions">
           <a className="button-link" href={originalCsvExportUrl}>
@@ -1454,10 +1578,19 @@ export function AnnotationPage() {
           <button
             className="danger"
             onClick={() => void handleResetTimeline()}
-            disabled={resettingTimeline}
+            disabled={resettingTimeline || deletingCurrentSession}
           >
             {resettingTimeline && <span className="spinner" aria-hidden="true" />}
             {resettingTimeline ? "Resetting..." : "Reset to Original"}
+          </button>
+          <button
+            type="button"
+            className="danger"
+            onClick={() => void handleDeleteCurrentSession()}
+            disabled={deletingCurrentSession || savingTitle || saveState === "saving"}
+          >
+            {deletingCurrentSession && <span className="spinner" aria-hidden="true" />}
+            {deletingCurrentSession ? "Deleting..." : "Delete Session"}
           </button>
           <Link className="button-link" to="/">Back to Sessions</Link>
         </div>

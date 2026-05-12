@@ -972,12 +972,50 @@ a.button-link.primary .spinner {
   gap: 0.28rem;
 }
 
+.annot-title-display {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.annot-title-display h1 {
+  margin: 0;
+}
+
+.annot-title-editor {
+  display: grid;
+  gap: 0.42rem;
+  max-width: min(38rem, 100%);
+}
+
+.annot-title-editor input {
+  width: 100%;
+  min-width: 14rem;
+  padding: 0.58rem 0.68rem;
+  border: 1px solid rgba(187, 201, 214, 0.9);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.98);
+  color: #162332;
+}
+
+.annot-title-editor .session-title-actions button,
+.annot-title-display .session-title-edit-button {
+  box-shadow: none;
+}
+
 .annot-title-group .panel-kicker {
   color: #87c4bb;
 }
 
 .annot-title-group h1 {
   color: var(--text-on-dark);
+}
+
+.annot-session-feedback {
+  margin: 0;
+  color: #ffd6d1;
+  font-size: 0.84rem;
 }
 
 .annot-subcopy {
@@ -1345,6 +1383,10 @@ a.button-link.primary .spinner {
 
   .annot-header {
     border-radius: 16px;
+  }
+
+  .annot-title-editor {
+    max-width: 100%;
   }
 
   .event-table {
