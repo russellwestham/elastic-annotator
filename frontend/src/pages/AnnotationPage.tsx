@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import {
@@ -13,6 +13,7 @@ import {
   resetEvents,
   saveEvents,
   updateSessionMetadata,
+  updateSessionVideoTiming,
 } from "../api";
 import { EventTable } from "../components/EventTable";
 import type { ErrorType, EventRow, SessionStatus, VideoSegment } from "../types";
@@ -30,6 +31,7 @@ const ERROR_TYPES: Array<"" | ErrorType> = [
 ];
 const KEYBOARD_SEEK_SECONDS = 0.2;
 const FRAME_TIME_EPSILON = 1e-6;
+const TIMING_MAPPING_FPS = 25;
 const TEAM_PLAYER_ID_PATTERN = /^(home|away)_\d+$/;
 const TEAM_PLAYER_ID_DETAIL_PATTERN = /^(home|away)_(\d+)$/;
 const WARNING_FRAME_PATTERN = /\bframe_id=(\d+)\b/;
@@ -148,14 +150,39 @@ function findInsertIndexByFrame(rows: EventRow[], currentFrame: number): number 
   return rows.length;
 }
 
+function hasConfirmedSegmentTiming(segment: VideoSegment | null | undefined): boolean {
+  return !!(
+    segment
+    && segment.timing_confirmed
+    && typeof segment.period_start_frame === "number"
+    && Number.isFinite(segment.period_start_frame)
+    && typeof segment.video_start_time_seconds === "number"
+    && Number.isFinite(segment.video_start_time_seconds)
+  );
+}
+
+function getSegmentMappingFrameCount(segment: VideoSegment | null | undefined): number | null {
+  if (!segment) {
+    return null;
+  }
+  if (typeof segment.duration_seconds === "number" && Number.isFinite(segment.duration_seconds) && segment.duration_seconds > 0) {
+    return Math.max(1, Math.round(segment.duration_seconds * TIMING_MAPPING_FPS));
+  }
+  if (typeof segment.frame_count === "number" && Number.isFinite(segment.frame_count) && segment.frame_count > 0) {
+    return Math.round(segment.frame_count);
+  }
+  return null;
+}
+
 function getSegmentEndFrame(segment: VideoSegment | null | undefined): number | null {
-  if (!segment || typeof segment.start_frame !== "number" || typeof segment.frame_count !== "number") {
+  const frameCount = getSegmentMappingFrameCount(segment);
+  if (!segment || typeof segment.start_frame !== "number" || frameCount === null) {
     return null;
   }
-  if (!Number.isFinite(segment.start_frame) || !Number.isFinite(segment.frame_count) || segment.frame_count <= 0) {
+  if (!Number.isFinite(segment.start_frame)) {
     return null;
   }
-  return segment.start_frame + segment.frame_count - 1;
+  return segment.start_frame + frameCount - 1;
 }
 
 function buildLegacyVideoSegments(session: SessionStatus | null): VideoSegment[] {
@@ -178,6 +205,8 @@ function buildLegacyVideoSegments(session: SessionStatus | null): VideoSegment[]
       url,
       original_filename: index === 0 ? session.original_video_filename ?? null : null,
       start_frame: Number.isFinite(startFrame) ? startFrame : 0,
+      period_start_frame: null,
+      video_start_time_seconds: null,
       timing_confirmed: false,
       frame_count: frameCount,
       duration_seconds: index === 0 ? session.video_duration_seconds ?? null : null,
@@ -256,6 +285,14 @@ function frameToEventTimestamp(frameId: number, fps: number, offsetSeconds: numb
   return formatSeconds(seconds);
 }
 
+function getFrameTimestampFromSegmentTiming(frameId: number, segment: VideoSegment): string {
+  if (!hasConfirmedSegmentTiming(segment) || typeof segment.period_start_frame !== "number") {
+    return formatSeconds(0);
+  }
+  const seconds = (frameId - segment.period_start_frame) / TIMING_MAPPING_FPS;
+  return formatSeconds(seconds);
+}
+
 function getSessionTitle(session: SessionStatus | null | undefined): string {
   return (
     session?.session_name?.trim()
@@ -313,31 +350,6 @@ function median(values: number[]): number {
     return (left + right) / 2;
   }
   return sorted[mid] ?? 0;
-}
-
-function inferVideoStartFrame(rows: EventRow[], fps: number): number {
-  if (!Number.isFinite(fps) || fps <= 0) return 0;
-
-  const anchors: number[] = [];
-  for (const row of rows) {
-    if (typeof row.synced_frame_id === "number") {
-      const seconds = parseTimestampToSeconds(row.synced_ts);
-      if (seconds !== null) {
-        anchors.push(row.synced_frame_id - seconds * fps);
-      }
-    }
-    if (typeof row.receive_frame_id === "number") {
-      const seconds = parseTimestampToSeconds(row.receive_ts);
-      if (seconds !== null) {
-        anchors.push(row.receive_frame_id - seconds * fps);
-      }
-    }
-  }
-
-  if (anchors.length === 0) {
-    return 0;
-  }
-  return Math.max(0, Math.round(median(anchors)));
 }
 
 function buildPeriodOffsetMap(rows: EventRow[], fps: number): { byPeriod: Map<number, number>; fallback: number } {
@@ -435,12 +447,13 @@ export function AnnotationPage() {
 
   const [session, setSession] = useState<SessionStatus | null>(null);
   const [events, setEvents] = useState<EventRow[]>([]);
+  const [initialEvents, setInitialEvents] = useState<EventRow[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [pairSelection, setPairSelection] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [currentSegmentFrame, setCurrentSegmentFrame] = useState(0);
+  const [currentVideoTime, setCurrentVideoTime] = useState(0);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveMessage, setSaveMessage] = useState("");
   const [resettingTimeline, setResettingTimeline] = useState(false);
@@ -452,8 +465,10 @@ export function AnnotationPage() {
   const [pendingSeekFrame, setPendingSeekFrame] = useState<number | null>(null);
   const [draftRow, setDraftRow] = useState<EventRow | null>(null);
   const [segmentUploadFile, setSegmentUploadFile] = useState<File | null>(null);
-  const [segmentUploadStartFrame, setSegmentUploadStartFrame] = useState("");
+  const [segmentTimingPeriodStartFrame, setSegmentTimingPeriodStartFrame] = useState("");
+  const [segmentTimingVideoStartTime, setSegmentTimingVideoStartTime] = useState("");
   const [uploadingSegment, setUploadingSegment] = useState(false);
+  const [savingSegmentTiming, setSavingSegmentTiming] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState("");
   const [savingTitle, setSavingTitle] = useState(false);
@@ -464,7 +479,6 @@ export function AnnotationPage() {
   const fps = session?.fps ?? 25;
   const isUploadSession = session?.session_mode === "upload_csv";
   const hasPendingRowChanges = !!(selectedRow && draftRow && !isSameEventRow(selectedRow, draftRow));
-  const isErrorTypeRequired = hasPendingRowChanges && !draftRow?.error_type;
   const selectedAnchorFrame = getAnchorFrame(selectedRow);
   const draftPlayerId = draftRow?.player_id ?? selectedRow?.player_id ?? "";
   const draftReceiverId = draftRow?.receiver_id ?? selectedRow?.receiver_id ?? "";
@@ -481,27 +495,40 @@ export function AnnotationPage() {
   }, [events]);
 
   const knownEntityIdSet = useMemo(() => new Set(knownEntityIds), [knownEntityIds]);
+  const initialEventById = useMemo(() => new Map(initialEvents.map((row) => [row.id, row])), [initialEvents]);
   const isDraftPlayerIdValid = isValidEntityId(draftRow?.player_id, false, knownEntityIdSet);
   const isDraftReceiverIdValid = isValidEntityId(draftRow?.receiver_id, true, knownEntityIdSet);
   const canConfirmRowChanges = !!(
     selectedRow
     && draftRow
     && hasPendingRowChanges
-    && draftRow.error_type
     && isDraftPlayerIdValid
     && isDraftReceiverIdValid
   );
+  const initialSelectedRow = selectedRow ? initialEventById.get(selectedRow.id) ?? null : null;
+  const editableSelectedRow = draftRow ?? selectedRow;
+  const canResetSelectedRow = !!(
+    selectedRow
+    && (
+      initialSelectedRow
+        ? editableSelectedRow && !isSameEventRow(editableSelectedRow, initialSelectedRow)
+        : true
+    )
+  );
+  const resetSelectedRowTitle = !selectedRow
+    ? "No row selected."
+    : initialSelectedRow
+      ? "Reset this row to the original CSV values."
+      : "This row is not in the original CSV. Reset will remove it.";
   const confirmBlockedReason = !selectedRow || !draftRow
     ? "No row selected."
     : !hasPendingRowChanges
       ? "No edits to apply."
-      : !draftRow.error_type
-        ? "Select an error_type."
-        : !isDraftPlayerIdValid
-          ? "Check player_id."
-          : !isDraftReceiverIdValid
-            ? "Check receiver_id."
-            : "";
+      : !isDraftPlayerIdValid
+        ? "Check player_id."
+        : !isDraftReceiverIdValid
+          ? "Check receiver_id."
+          : "";
   const syncedTimingPoints = useMemo(() => {
     const points: Array<{ periodId: number; frameId: number; offset: number }> = [];
     for (const row of events) {
@@ -561,6 +588,7 @@ export function AnnotationPage() {
     return videoSegments[activeVideoIndex] ?? null;
   }, [activeVideoIndex, videoSegments]);
   const activeVideoFps = activeVideoSegment?.fps ?? fps;
+  const activeVideoHasTiming = hasConfirmedSegmentTiming(activeVideoSegment);
   const videoUrl = useMemo(() => {
     if (!activeVideoSegment?.url) return null;
     return buildArtifactUrl(activeVideoSegment.url);
@@ -568,34 +596,37 @@ export function AnnotationPage() {
   const segmentOptionLabels = useMemo(() => {
     return videoSegments.map((segment, idx) => {
       const filename = segment.original_filename?.trim() || `Segment ${idx + 1}`;
-      const startLabel = segment.start_frame.toLocaleString("en-US");
       const endFrame = getSegmentEndFrame(segment);
-      const segmentFps = segment.fps || fps;
-      
-      if (endFrame === null) {
-        return `${filename} | Start ${startLabel}`;
+
+      if (hasConfirmedSegmentTiming(segment)) {
+        return `${filename}`;
       }
-      const endLabel = endFrame.toLocaleString("en-US");
-      const startTs = formatSeconds(segment.start_frame / segmentFps);
-      const endTs = formatSeconds(endFrame / segmentFps);
-      return `${filename} | Frames ${startLabel} - ${endLabel} | Time ${startTs} - ${endTs}`;
+
+      if (endFrame === null) {
+        return `${filename}`;
+      }
+      return `${filename}`;
     });
-  }, [fps, videoSegments]);
+  }, [videoSegments]);
 
-  const inferredStartFrame = useMemo(() => {
-    if (!isUploadSession) {
-      return 0;
+  const playheadStartFrame = activeVideoSegment?.start_frame ?? 0;
+  const currentFrame = useMemo(() => {
+    if (
+      activeVideoHasTiming
+      && activeVideoSegment
+      && typeof activeVideoSegment.period_start_frame === "number"
+      && typeof activeVideoSegment.video_start_time_seconds === "number"
+    ) {
+      return Math.max(
+        0,
+        Math.round(
+          activeVideoSegment.period_start_frame
+          + (activeVideoSegment.video_start_time_seconds + currentVideoTime) * TIMING_MAPPING_FPS,
+        ),
+      );
     }
-    return inferVideoStartFrame(events, fps);
-  }, [events, fps, isUploadSession]);
-
-  const uploadStartFrame =
-    isUploadSession && typeof session?.video_start_frame === "number"
-      ? session.video_start_frame
-      : inferredStartFrame;
-  const playheadStartFrame = activeVideoSegment?.start_frame ?? uploadStartFrame;
-
-  const currentFrame = playheadStartFrame + currentSegmentFrame;
+    return playheadStartFrame + currentSegmentFrame;
+  }, [activeVideoHasTiming, activeVideoSegment, currentSegmentFrame, currentVideoTime, playheadStartFrame]);
   const selectedFrameDelta = selectedAnchorFrame === null ? null : selectedAnchorFrame - currentFrame;
   const saveStateLabel = saveState === "saving"
     ? "Saving changes"
@@ -623,36 +654,54 @@ export function AnnotationPage() {
     }
     return defaultTimestampOffset;
   }, [defaultTimestampOffset, periodTimestampOffsets, syncedTimingPoints]);
-  const normalizedPairSelection = useMemo(() => {
-    return Array.from(new Set(pairSelection))
-      .filter((index) => index >= 0 && index < events.length)
-      .sort((a, b) => a - b)
-      .slice(0, 2);
-  }, [events.length, pairSelection]);
-  const pairSourceIndex = normalizedPairSelection.length === 2 ? normalizedPairSelection[0] : null;
-  const pairTargetIndex = normalizedPairSelection.length === 2 ? normalizedPairSelection[1] : null;
-  const pairSourceRow = pairSourceIndex === null ? null : events[pairSourceIndex] ?? null;
-  const pairTargetRow = pairTargetIndex === null ? null : events[pairTargetIndex] ?? null;
-  const canAlignPair = !!(
-    pairSourceRow
-    && pairTargetRow
-    && typeof pairTargetRow.synced_frame_id === "number"
-    && Number.isFinite(pairTargetRow.synced_frame_id)
-    && !hasPendingRowChanges
+  const nextEventIndex = selectedIndex + 1 < events.length ? selectedIndex + 1 : null;
+  const nextEventRow = nextEventIndex === null ? null : events[nextEventIndex] ?? null;
+  const canAlignWithNextEvent = !!(
+    selectedRow
+    && nextEventRow
+    && typeof nextEventRow.synced_frame_id === "number"
+    && Number.isFinite(nextEventRow.synced_frame_id)
   );
-  const pairAlignTitle = hasPendingRowChanges
-    ? "Apply or discard row edits first."
-    : normalizedPairSelection.length !== 2
-      ? "Hold Command and click two rows."
-      : canAlignPair
-        ? "Align the earlier row to the later row's synced frame."
-        : "The later row needs a synced_frame_id.";
+  const alignWithNextEventTitle = !selectedRow
+    ? "Select a row first."
+    : nextEventIndex === null
+      ? "No next event to align with."
+      : !nextEventRow || typeof nextEventRow.synced_frame_id !== "number" || !Number.isFinite(nextEventRow.synced_frame_id)
+        ? "The next event needs a synced_frame_id."
+        : "Align this row to the next event's synced frame.";
   const activePeriodId = draftRow?.period_id ?? selectedRow?.period_id ?? 1;
   const activeTimestampOffset = getTimestampOffsetForPeriod(activePeriodId, currentFrame);
+  const getEventTimestampForFrame = useCallback((frame: number, periodId: number | null | undefined) => {
+    if (activeVideoHasTiming && activeVideoSegment) {
+      return getFrameTimestampFromSegmentTiming(frame, activeVideoSegment);
+    }
+    return frameToEventTimestamp(frame, fps, getTimestampOffsetForPeriod(periodId, frame));
+  }, [activeVideoHasTiming, activeVideoSegment, fps, getTimestampOffsetForPeriod]);
   const absoluteTimestamp = useMemo(
-    () => frameToEventTimestamp(currentFrame, fps, activeTimestampOffset),
-    [currentFrame, fps, activeTimestampOffset],
+    () => (
+      activeVideoHasTiming && activeVideoSegment
+        ? formatSeconds((activeVideoSegment.video_start_time_seconds ?? 0) + currentVideoTime)
+        : frameToEventTimestamp(currentFrame, fps, activeTimestampOffset)
+    ),
+    [activeTimestampOffset, activeVideoHasTiming, activeVideoSegment, currentFrame, currentVideoTime, fps],
   );
+  const parsedSegmentTimingPeriodStartFrame = useMemo(() => {
+    const parsed = Number(segmentTimingPeriodStartFrame.trim());
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null;
+  }, [segmentTimingPeriodStartFrame]);
+  const parsedSegmentTimingVideoStartTime = useMemo(
+    () => parseTimestampToSeconds(segmentTimingVideoStartTime),
+    [segmentTimingVideoStartTime],
+  );
+  const pendingDerivedStartFrame = useMemo(() => {
+    if (parsedSegmentTimingPeriodStartFrame === null || parsedSegmentTimingVideoStartTime === null) {
+      return null;
+    }
+    return Math.max(
+      0,
+      Math.round(parsedSegmentTimingPeriodStartFrame + parsedSegmentTimingVideoStartTime * TIMING_MAPPING_FPS),
+    );
+  }, [parsedSegmentTimingPeriodStartFrame, parsedSegmentTimingVideoStartTime]);
   const warningItems = useMemo(
     () =>
       warnings.slice(0, 20).map((text, index) => {
@@ -695,6 +744,7 @@ export function AnnotationPage() {
           setSessionId("");
           setSession(null);
           setEvents([]);
+          setInitialEvents([]);
           setWarnings([]);
           setInitialLoaded(false);
           setDirty(false);
@@ -709,6 +759,7 @@ export function AnnotationPage() {
         setSessionId("");
         setSession(null);
         setEvents([]);
+        setInitialEvents([]);
         setWarnings([]);
         setInitialLoaded(false);
         setDirty(false);
@@ -735,12 +786,34 @@ export function AnnotationPage() {
 
   useEffect(() => {
     setCurrentSegmentFrame(0);
+    setCurrentVideoTime(0);
   }, [selectedVideoIndex]);
+
+  useEffect(() => {
+    if (!activeVideoSegment) {
+      setSegmentTimingPeriodStartFrame("");
+      setSegmentTimingVideoStartTime("");
+      return;
+    }
+
+    setSegmentTimingPeriodStartFrame(
+      typeof activeVideoSegment.period_start_frame === "number"
+        ? String(activeVideoSegment.period_start_frame)
+        : "",
+    );
+    setSegmentTimingVideoStartTime(
+      typeof activeVideoSegment.video_start_time_seconds === "number"
+        ? formatSeconds(activeVideoSegment.video_start_time_seconds)
+        : "",
+    );
+  }, [activeVideoSegment]);
 
   const syncDisplayedSegmentFrame = useCallback(
     (videoEl: HTMLVideoElement, mediaTime?: number) => {
-      const nextFrame = getSegmentFrameFromTime(mediaTime ?? videoEl.currentTime, activeVideoFps);
+      const nextMediaTime = mediaTime ?? videoEl.currentTime;
+      const nextFrame = getSegmentFrameFromTime(nextMediaTime, activeVideoFps);
       setCurrentSegmentFrame(nextFrame);
+      setCurrentVideoTime(Math.max(0, nextMediaTime));
     },
     [activeVideoFps],
   );
@@ -831,10 +904,13 @@ export function AnnotationPage() {
       const s = await fetchSession(sessionId);
       setSession(s);
       if (s.status === "ready") {
-        const eventData = await fetchEvents(sessionId);
+        const [eventData, initialEventData] = await Promise.all([
+          fetchEvents(sessionId),
+          fetchEvents(sessionId, "initial").catch(() => null),
+        ]);
         const normalized = normalizeMissingRowsByFrame(eventData.events, s.fps ?? 25);
         setEvents(normalized.rows);
-        setPairSelection([]);
+        setInitialEvents(initialEventData?.events?.length ? initialEventData.events : eventData.events);
         setWarnings(eventData.validation_warnings);
         setInitialLoaded(true);
         setDirty(normalized.changed);
@@ -881,10 +957,13 @@ export function AnnotationPage() {
       if (updated.status !== "processing") {
         window.clearInterval(timer);
         if (updated.status === "ready") {
-          const eventData = await fetchEvents(sessionId);
+          const [eventData, initialEventData] = await Promise.all([
+            fetchEvents(sessionId),
+            fetchEvents(sessionId, "initial").catch(() => null),
+          ]);
           const normalized = normalizeMissingRowsByFrame(eventData.events, updated.fps ?? 25);
           setEvents(normalized.rows);
-          setPairSelection([]);
+          setInitialEvents(initialEventData?.events?.length ? initialEventData.events : eventData.events);
           setWarnings(eventData.validation_warnings);
           setInitialLoaded(true);
           setDirty(normalized.changed);
@@ -940,55 +1019,69 @@ export function AnnotationPage() {
     // Auto-follow only when frame/events change. Avoid overriding manual row click
     // simply because selectedIndex changed in the same frame.
     setSelectedIndex((prev) => {
-      if (prev !== targetIndex) {
-        setPairSelection([targetIndex]);
-      }
       return prev === targetIndex ? prev : targetIndex;
     });
   }, [currentFrame, events, hasPendingRowChanges]);
 
-  const alignPairToLaterSync = useCallback(() => {
-    if (!canAlignPair || pairSourceIndex === null || !pairTargetRow) {
+  const alignWithNextEvent = useCallback(() => {
+    if (!selectedRow || nextEventIndex === null || !nextEventRow) {
       return;
     }
 
-    const targetFrame = pairTargetRow.synced_frame_id;
-    if (typeof targetFrame !== "number") {
+    const targetFrame = nextEventRow.synced_frame_id;
+    if (typeof targetFrame !== "number" || !Number.isFinite(targetFrame)) {
       return;
     }
+    const sourceRow = draftRow ?? selectedRow;
+    if (!isValidEntityId(sourceRow.player_id, false, knownEntityIdSet)) {
+      setSaveState("error");
+      setSaveMessage("Select a valid player_id before aligning.");
+      return;
+    }
+    if (!isValidEntityId(sourceRow.receiver_id, true, knownEntityIdSet)) {
+      setSaveState("error");
+      setSaveMessage("Select a valid receiver_id or leave it blank before aligning.");
+      return;
+    }
+
     const targetTimestamp =
-      pairTargetRow.synced_ts
-      ?? frameToEventTimestamp(
-        targetFrame,
-        fps,
-        getTimestampOffsetForPeriod(pairTargetRow.period_id, targetFrame),
-      );
+      nextEventRow.synced_ts
+      ?? getEventTimestampForFrame(targetFrame, nextEventRow.period_id);
 
     const nextEvents = [...events];
-    const sourceRow = nextEvents[pairSourceIndex];
-    if (!sourceRow) {
+    const currentRow = nextEvents[selectedIndex];
+    if (!currentRow) {
       return;
     }
 
-    nextEvents[pairSourceIndex] = {
+    const alignedRow: EventRow = {
       ...sourceRow,
       synced_frame_id: targetFrame,
       synced_ts: targetTimestamp,
+      error_type: "synced_ts",
     };
+    if (isSameEventRow(currentRow, alignedRow)) {
+      setSaveState("idle");
+      setSaveMessage("Current row is already aligned with the next event.");
+      return;
+    }
+
+    nextEvents[selectedIndex] = alignedRow;
     setEvents(nextEvents);
     setDirty(true);
     setSaveState("saved");
     setSaveMessage(
-      `Aligned row #${pairSourceIndex + 1} to row #${(pairTargetIndex ?? pairSourceIndex) + 1}`,
+      `Aligned row #${selectedIndex + 1} with next event (#${nextEventIndex + 1})`,
     );
   }, [
-    canAlignPair,
+    draftRow,
     events,
-    fps,
-    getTimestampOffsetForPeriod,
-    pairSourceIndex,
-    pairTargetIndex,
-    pairTargetRow,
+    getEventTimestampForFrame,
+    knownEntityIdSet,
+    nextEventIndex,
+    nextEventRow,
+    selectedIndex,
+    selectedRow,
   ]);
 
   useEffect(() => {
@@ -999,9 +1092,9 @@ export function AnnotationPage() {
       if (isInteractiveTarget(event.target)) {
         return;
       }
-      if (event.key === "Enter" && canAlignPair) {
+      if (event.key === "Enter" && canAlignWithNextEvent) {
         event.preventDefault();
-        alignPairToLaterSync();
+        alignWithNextEvent();
         return;
       }
       if (!videoRef.current) {
@@ -1035,7 +1128,7 @@ export function AnnotationPage() {
 
     window.addEventListener("keydown", handler, { capture: true });
     return () => window.removeEventListener("keydown", handler, { capture: true });
-  }, [activeVideoFps, alignPairToLaterSync, canAlignPair, seekBySegmentFrames]);
+  }, [activeVideoFps, alignWithNextEvent, canAlignWithNextEvent, seekBySegmentFrames]);
 
   const updateDraftRow = (patch: Partial<EventRow>) => {
     setDraftRow((prev) => {
@@ -1070,12 +1163,6 @@ export function AnnotationPage() {
       return;
     }
 
-    if (!draftRow.error_type) {
-      setSaveState("error");
-      setSaveMessage("Select an error_type before applying changes.");
-      return;
-    }
-
     if (!isValidEntityId(draftRow.player_id, false, knownEntityIdSet)) {
       setSaveState("error");
       setSaveMessage("Select a valid player_id.");
@@ -1096,11 +1183,66 @@ export function AnnotationPage() {
     setSaveMessage("Row changes confirmed");
   };
 
+  const resetSelectedRow = () => {
+    if (!selectedRow) {
+      return;
+    }
+
+    if (initialSelectedRow) {
+      if (editableSelectedRow && isSameEventRow(editableSelectedRow, initialSelectedRow)) {
+        setSaveState("idle");
+        setSaveMessage("This row is already back to its original CSV values.");
+        return;
+      }
+
+      if (hasPendingRowChanges && isSameEventRow(selectedRow, initialSelectedRow)) {
+        setDraftRow({ ...initialSelectedRow });
+        setSaveState("idle");
+        setSaveMessage(`Discarded draft changes for row #${selectedIndex + 1}`);
+        return;
+      }
+
+      const confirmed = window.confirm(
+        hasPendingRowChanges
+          ? "Discard current edits and reset this row to the original CSV values?"
+          : "Reset this row to the original CSV values?",
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      const nextEvents = [...events];
+      nextEvents[selectedIndex] = { ...initialSelectedRow };
+      setEvents(nextEvents);
+      setDirty(true);
+      setSaveState("saved");
+      setSaveMessage(`Reset row #${selectedIndex + 1} to the original CSV values`);
+      return;
+    }
+
+    const confirmed = window.confirm(
+      hasPendingRowChanges
+        ? "Discard current edits and remove this row? It does not exist in the original CSV."
+        : "Remove this row? It does not exist in the original CSV.",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const nextEvents = [...events];
+    nextEvents.splice(selectedIndex, 1);
+    const nextSelectedIndex = nextEvents.length === 0 ? 0 : Math.min(selectedIndex, nextEvents.length - 1);
+    setEvents(nextEvents);
+    setSelectedIndex(nextSelectedIndex);
+    setDirty(true);
+    setSaveState("saved");
+    setSaveMessage(`Removed row #${selectedIndex + 1} because it is not in the original CSV`);
+  };
+
   const applyCurrentTo = (field: "synced" | "receive") => {
     if (!draftRow) return;
     const frame = currentFrame;
-    const offset = getTimestampOffsetForPeriod(draftRow.period_id, frame);
-    const ts = frameToEventTimestamp(frame, fps, offset);
+    const ts = getEventTimestampForFrame(frame, draftRow.period_id);
     if (field === "synced") {
       updateDraftRow({ synced_ts: ts, synced_frame_id: frame });
     } else {
@@ -1125,8 +1267,7 @@ export function AnnotationPage() {
     }
     const frame = Math.round(parsed);
     const targetPeriodId = draftRow?.period_id ?? selectedRow?.period_id ?? 1;
-    const offset = getTimestampOffsetForPeriod(targetPeriodId, frame);
-    const ts = frameToEventTimestamp(frame, fps, offset);
+    const ts = getEventTimestampForFrame(frame, targetPeriodId);
     if (field === "synced") {
       updateDraftRow({ synced_frame_id: frame, synced_ts: ts });
     } else {
@@ -1149,15 +1290,6 @@ export function AnnotationPage() {
       setSaveMessage("Select a video file first.");
       return;
     }
-
-    const parsed = Number(segmentUploadStartFrame.trim());
-    if (!Number.isFinite(parsed) || parsed < 0) {
-      setSaveState("error");
-      setSaveMessage("Video start frame must be a non-negative number.");
-      return;
-    }
-
-    const startFrame = Math.round(parsed);
     setUploadingSegment(true);
     setSaveState("saving");
     setSaveMessage("");
@@ -1165,31 +1297,72 @@ export function AnnotationPage() {
       const updated = await addSessionVideo({
         sessionId,
         videoFile: segmentUploadFile,
-        startFrame,
       });
       setSession(updated);
       let nextIndex = 0;
       for (let index = updated.video_segments.length - 1; index >= 0; index -= 1) {
         const segment = updated.video_segments[index];
         if (
-          segment?.start_frame === startFrame
-          && (segment.original_filename ?? "").trim() === segmentUploadFile.name.trim()
+          (segment.original_filename ?? "").trim() === segmentUploadFile.name.trim()
         ) {
           nextIndex = index;
           break;
         }
       }
       setSelectedVideoIndex(nextIndex);
-      setPendingSeekFrame(startFrame);
       setSegmentUploadFile(null);
-      setSegmentUploadStartFrame("");
       setSaveState("saved");
-      setSaveMessage("Video segment updated");
+      setSaveMessage("Video segment uploaded. Apply timing when you are ready.");
     } catch (err) {
       setSaveState("error");
       setSaveMessage((err as Error).message);
     } finally {
       setUploadingSegment(false);
+    }
+  };
+
+  const handleApplySegmentTiming = async () => {
+    if (!sessionId || !activeVideoSegment) {
+      return;
+    }
+
+    const parsedPeriodStartFrame = Number(segmentTimingPeriodStartFrame.trim());
+    if (!Number.isFinite(parsedPeriodStartFrame) || parsedPeriodStartFrame < 0) {
+      setSaveState("error");
+      setSaveMessage("Period start frame must be a non-negative number.");
+      return;
+    }
+
+    const parsedVideoStartTime = parseTimestampToSeconds(segmentTimingVideoStartTime);
+    if (parsedVideoStartTime === null || parsedVideoStartTime < 0) {
+      setSaveState("error");
+      setSaveMessage("Video start time must be seconds, MM:SS(.ff), or HH:MM:SS(.ff).");
+      return;
+    }
+
+    setSavingSegmentTiming(true);
+    setSaveState("saving");
+    setSaveMessage("");
+    try {
+      const updated = await updateSessionVideoTiming({
+        sessionId,
+        segmentId: activeVideoSegment.id,
+        periodStartFrame: Math.round(parsedPeriodStartFrame),
+        videoStartTimeSeconds: parsedVideoStartTime,
+      });
+      setSession(updated);
+      const nextSegments = updated.video_segments?.length ? updated.video_segments : buildLegacyVideoSegments(updated);
+      const nextIndex = nextSegments.findIndex((segment) => segment.id === activeVideoSegment.id);
+      if (nextIndex >= 0) {
+        setSelectedVideoIndex(nextIndex);
+      }
+      setSaveState("saved");
+      setSaveMessage("Video timing applied");
+    } catch (err) {
+      setSaveState("error");
+      setSaveMessage((err as Error).message);
+    } finally {
+      setSavingSegmentTiming(false);
     }
   };
 
@@ -1310,41 +1483,16 @@ export function AnnotationPage() {
     );
     if (exactIndex >= 0) {
       setSelectedIndex(exactIndex);
-      setPairSelection([exactIndex]);
     } else {
       const nearestIndex = findEventIndexByFrame(events, frameId);
       if (nearestIndex !== null) {
         setSelectedIndex(nearestIndex);
-        setPairSelection([nearestIndex]);
       }
     }
     seekToAbsoluteFrame(frameId);
   };
 
-  const updatePairSelectionOnly = (index: number) => {
-    setPairSelection((prev) => {
-      const validPrev = prev.filter((item) => item >= 0 && item < events.length);
-      if (validPrev.length === 0 || validPrev.length >= 2 || validPrev.includes(index)) {
-        return [index];
-      }
-      return [validPrev[0], index];
-    });
-  };
-
-  const handleSelectEvent = (index: number, event: MouseEvent<HTMLTableRowElement>) => {
-    if (event.metaKey) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (hasPendingRowChanges) {
-        setSaveState("error");
-        setSaveMessage("Apply or discard row edits before pair selection.");
-        return;
-      }
-      suppressAutoFollowRef.current = true;
-      updatePairSelectionOnly(index);
-      return;
-    }
-
+  const handleSelectEvent = (index: number) => {
     if (index !== selectedIndex && hasPendingRowChanges) {
       const discard = window.confirm("You have unapplied changes in this row. Discard them and continue?");
       if (!discard) {
@@ -1357,7 +1505,6 @@ export function AnnotationPage() {
     }
     suppressAutoFollowRef.current = true;
     setSelectedIndex(index);
-    setPairSelection([index]);
     const row = events[index];
     if (!row) return;
 
@@ -1374,8 +1521,7 @@ export function AnnotationPage() {
     const selectedReceiveTs = selectedRow?.receive_ts?.trim() ?? "";
     const selectedReceiveFrame = selectedRow?.receive_frame_id;
     const defaultSyncedFrame = typeof selectedReceiveFrame === "number" ? selectedReceiveFrame : currentFrame;
-    const defaultOffset = getTimestampOffsetForPeriod(basePeriod, defaultSyncedFrame);
-    const computedSyncedTs = frameToEventTimestamp(defaultSyncedFrame, fps, defaultOffset);
+    const computedSyncedTs = getEventTimestampForFrame(defaultSyncedFrame, basePeriod);
     const selectedReceiveSec = parseTimestampToSeconds(selectedReceiveTs);
     const computedSyncedSec = parseTimestampToSeconds(computedSyncedTs);
     const canReuseSelectedReceiveTs = (
@@ -1408,7 +1554,6 @@ export function AnnotationPage() {
     nextEvents.splice(insertIndex, 0, newRow);
     setEvents(nextEvents);
     setSelectedIndex(insertIndex);
-    setPairSelection([insertIndex]);
     setDirty(true);
   };
 
@@ -1427,7 +1572,6 @@ export function AnnotationPage() {
     const nextSelectedIndex = nextEvents.length === 0 ? 0 : Math.min(selectedIndex, nextEvents.length - 1);
     setEvents(nextEvents);
     setSelectedIndex(nextSelectedIndex);
-    setPairSelection(nextEvents.length === 0 ? [] : [nextSelectedIndex]);
     setDirty(true);
   };
 
@@ -1455,14 +1599,17 @@ export function AnnotationPage() {
       );
       const latest = await fetchSession(sessionId);
       setSession(latest);
-      const eventData = await fetchEvents(sessionId);
+      const [eventData, initialEventData] = await Promise.all([
+        fetchEvents(sessionId),
+        fetchEvents(sessionId, "initial").catch(() => null),
+      ]);
       setEvents(eventData.events);
+      setInitialEvents(initialEventData?.events?.length ? initialEventData.events : eventData.events);
       setWarnings(eventData.validation_warnings);
       setSelectedIndex((prev) => {
         if (eventData.events.length === 0) return 0;
         return Math.min(prev, eventData.events.length - 1);
       });
-      setPairSelection([]);
       setDirty(false);
     } catch (err) {
       setSaveState("error");
@@ -1561,7 +1708,8 @@ export function AnnotationPage() {
             <span className="meta-pill">{events.length} rows</span>
             <span className="meta-pill">{isUploadSession ? "Uploaded CSV" : "Public Dataset"}</span>
             {isUploadSession && <span className="meta-pill">{session.persist ? "Saved" : "Temporary"}</span>}
-            {isUploadSession && <span className="meta-pill">Start frame {playheadStartFrame}</span>}
+            {isUploadSession && <span className="meta-pill">25 fps mapping</span>}
+            {isUploadSession && <span className="meta-pill">{activeVideoHasTiming ? "Timing Ready" : "Needs Timing"}</span>}
             <span className={`status-chip ${saveState}`} aria-live="polite">
               {saveState === "saving" && <span className="spinner" aria-hidden="true" />}
               {saveStateLabel}
@@ -1626,7 +1774,7 @@ export function AnnotationPage() {
                     <div className="frame-readout-main">{absoluteTimestamp}</div>
                   </div>
                   <div>
-                    <div className="frame-readout-label">Playhead Frame</div>
+                    <div className="frame-readout-label">Frame</div>
                     <div className="frame-readout-main frame-readout-frame">{currentFrame}</div>
                   </div>
                 </div>
@@ -1656,6 +1804,85 @@ export function AnnotationPage() {
                   syncDisplayedSegmentFrame(videoEl);
                 }}
               />
+              <div className="video-segment-editor">
+                <label className={`video-segment-upload${uploadingSegment ? " is-disabled" : ""}`}>
+                  <span className="video-segment-upload-label">Replace or add video</span>
+                  <span className="video-segment-upload-control">
+                    <span className="video-segment-upload-button">Choose Video File</span>
+                    <input
+                      key={segmentUploadFile?.name ?? "video-segment-empty"}
+                      type="file"
+                      accept=".mp4,.mov,.m4v,.webm,video/*"
+                      onChange={(e) => setSegmentUploadFile(e.target.files?.[0] ?? null)}
+                      disabled={uploadingSegment}
+                    />
+                  </span>
+                  <span className="video-segment-upload-name">
+                    {segmentUploadFile?.name ?? "No file selected"}
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  className="primary"
+                  onClick={() => void handleAddVideoSegment()}
+                  disabled={uploadingSegment}
+                >
+                  {uploadingSegment ? "Uploading..." : "Upload Video Segment"}
+                </button>
+              </div>
+              <div className="video-timing-panel">
+                <div className="video-timing-heading">
+                  <div>
+                    <h3>Timing Calibration</h3>
+                    <p className="muted compact-note">
+                      Derive the segment start frame from `period start frame + video start time x 25`.
+                    </p>
+                  </div>
+                  <div className="video-timing-status">
+                    <span className={`video-timing-chip${activeVideoHasTiming ? " is-ready" : " is-pending"}`}>
+                      {activeVideoHasTiming ? "Timing Ready" : "Needs Timing"}
+                    </span>
+                    <span className="video-timing-chip">25 fps mapping</span>
+                  </div>
+                </div>
+                <div className="video-timing-fields">
+                  <label>
+                    Period start frame
+                    <input
+                      type="number"
+                      min={0}
+                      value={segmentTimingPeriodStartFrame}
+                      onChange={(event) => setSegmentTimingPeriodStartFrame(event.target.value)}
+                      placeholder="e.g. 10000"
+                      disabled={savingSegmentTiming}
+                    />
+                  </label>
+                  <label>
+                    Video start time
+                    <input
+                      type="text"
+                      value={segmentTimingVideoStartTime}
+                      onChange={(event) => setSegmentTimingVideoStartTime(event.target.value)}
+                      placeholder="e.g. 00:10 or 10"
+                      disabled={savingSegmentTiming}
+                    />
+                  </label>
+                  <div className="video-timing-preview">
+                    <span className="video-timing-preview-label">Derived start frame</span>
+                    <strong>{pendingDerivedStartFrame?.toLocaleString("en-US") ?? "-"}</strong>
+                  </div>
+                </div>
+                <div className="video-timing-actions">
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={() => void handleApplySegmentTiming()}
+                    disabled={savingSegmentTiming || !activeVideoSegment}
+                  >
+                    {savingSegmentTiming ? "Applying..." : "Apply Timing"}
+                  </button>
+                </div>
+              </div>
               <div className="row controls-row">
                 <button onClick={() => jump(-5)}>-5s</button>
                 <button
@@ -1678,49 +1905,8 @@ export function AnnotationPage() {
               </div>
             </>
           ) : (
-            <div className="empty-video-state" style={{ padding: "2rem", textAlign: "center" }}>
-              <p className="muted" style={{ marginBottom: "1.5rem" }}>
-                No video available. Please upload a video segment below to start annotating.
-              </p>
-            </div>
+            <p className="muted">No video available.</p>
           )}
-          <div className="video-segment-editor" style={{ marginTop: "1rem" }}>
-            <label className={`video-segment-upload${uploadingSegment ? " is-disabled" : ""}`}>
-              <span className="video-segment-upload-label">Replace or add video</span>
-              <span className="video-segment-upload-control">
-                <span className="video-segment-upload-button">Choose Video File</span>
-                <input
-                  key={segmentUploadFile?.name ?? "video-segment-empty"}
-                  type="file"
-                  accept=".mp4,.mov,.m4v,.webm,video/*"
-                  onChange={(e) => setSegmentUploadFile(e.target.files?.[0] ?? null)}
-                  disabled={uploadingSegment}
-                />
-              </span>
-              <span className="video-segment-upload-name">
-                {segmentUploadFile?.name ?? "No file selected"}
-              </span>
-            </label>
-            <label className="video-segment-start-field">
-              Start frame
-              <input
-                type="number"
-                min={0}
-                value={segmentUploadStartFrame}
-                onChange={(e) => setSegmentUploadStartFrame(e.target.value)}
-                placeholder="e.g. 25000"
-                disabled={uploadingSegment}
-              />
-            </label>
-            <button
-              type="button"
-              className="primary"
-              onClick={() => void handleAddVideoSegment()}
-              disabled={uploadingSegment}
-            >
-              {uploadingSegment ? "Uploading..." : "Upload Video Segment"}
-            </button>
-          </div>
         </section>
 
         <div className="editor-stack">
@@ -1731,11 +1917,11 @@ export function AnnotationPage() {
                 <button
                   type="button"
                   className="primary"
-                  onClick={alignPairToLaterSync}
-                  disabled={!canAlignPair}
-                  title={pairAlignTitle}
+                  onClick={alignWithNextEvent}
+                  disabled={!canAlignWithNextEvent}
+                  title={alignWithNextEventTitle}
                 >
-                  Align to Later Sync
+                  Align with Next Event
                 </button>
                 <button onClick={addMissingRow}>Add Missing Event</button>
                 <button className="danger" disabled={!selectedRow} onClick={removeSelectedRow}>Delete Row</button>
@@ -1770,7 +1956,6 @@ export function AnnotationPage() {
             <EventTable
               rows={events}
               selectedIndex={selectedIndex}
-              pairSelection={normalizedPairSelection}
               currentFrame={currentFrame}
               onSelect={handleSelectEvent}
             />
@@ -1780,14 +1965,24 @@ export function AnnotationPage() {
             <div className="section-header">
               <h2>{selectedRow ? `Row #${selectedIndex + 1}` : "Inspector"}</h2>
               {selectedRow && (
-                <button
-                  className="primary"
-                  onClick={confirmRowChanges}
-                  disabled={!canConfirmRowChanges}
-                  title={canConfirmRowChanges ? "Apply changes to this row" : confirmBlockedReason}
-                >
-                  Apply Changes
-                </button>
+                <div className="section-actions">
+                  <button
+                    type="button"
+                    onClick={resetSelectedRow}
+                    disabled={!canResetSelectedRow}
+                    title={canResetSelectedRow ? resetSelectedRowTitle : "No row changes to reset."}
+                  >
+                    Reset Event
+                  </button>
+                  <button
+                    className="primary"
+                    onClick={confirmRowChanges}
+                    disabled={!canConfirmRowChanges}
+                    title={canConfirmRowChanges ? "Apply changes to this row" : confirmBlockedReason}
+                  >
+                    Apply Changes
+                  </button>
+                </div>
               )}
             </div>
 
@@ -1795,8 +1990,7 @@ export function AnnotationPage() {
               <>
                 <div className="inspector-status">
                   <span className="muted">{hasPendingRowChanges ? "Unsaved changes" : "No changes yet."}</span>
-                  {isErrorTypeRequired && <span className="error-text">Select an error_type to apply changes.</span>}
-                  {!canConfirmRowChanges && hasPendingRowChanges && !isErrorTypeRequired && (
+                  {!canConfirmRowChanges && hasPendingRowChanges && (
                     <span className="muted">{confirmBlockedReason}</span>
                   )}
                 </div>
@@ -1914,9 +2108,7 @@ export function AnnotationPage() {
                   <label>
                     error_type
                     <select
-                      className={isErrorTypeRequired ? "input-error" : ""}
-                      aria-invalid={isErrorTypeRequired}
-                      value={draftRow?.error_type ?? selectedRow.error_type ?? ""}
+                      value={draftRow ? (draftRow.error_type ?? "") : (selectedRow.error_type ?? "")}
                       onChange={(e) => updateDraftRow({ error_type: (e.target.value || null) as ErrorType | null })}
                     >
                       {ERROR_TYPES.map((value) => (
@@ -1925,11 +2117,8 @@ export function AnnotationPage() {
                         </option>
                       ))}
                     </select>
-                    {isErrorTypeRequired && (
-                      <p className="error-text id-format-help">error_type is required to apply changes.</p>
-                    )}
-                    {!isErrorTypeRequired && hasPendingRowChanges && (
-                      <p className="muted id-format-help">Auto-picked from the changed field. If several fields changed, the leftmost field wins.</p>
+                    {hasPendingRowChanges && (
+                      <p className="muted id-format-help">Auto-picked from the changed field. You can keep (none) when no error label is needed.</p>
                     )}
                   </label>
                 </div>

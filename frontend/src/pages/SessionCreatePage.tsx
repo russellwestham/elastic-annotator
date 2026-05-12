@@ -16,53 +16,41 @@ import type { MatchSummary, SessionStatus } from "../types";
 
 type CreateMode = "existing" | "upload";
 
-function formatRelativeTime(iso: string, now: number): string {
+function formatDateTime(iso: string): string {
   const dt = new Date(iso);
   if (Number.isNaN(dt.getTime())) {
     return iso;
   }
-
-  const diffMs = now - dt.getTime();
-  const isFuture = diffMs < 0;
-  const diffSeconds = Math.max(0, Math.round(Math.abs(diffMs) / 1000));
-
-  let value: number;
-  let unit: string;
-  if (diffSeconds < 10) {
-    return "just now";
-  }
-  if (diffSeconds < 60) {
-    value = diffSeconds;
-    unit = "s";
-  } else if (diffSeconds < 3600) {
-    value = Math.floor(diffSeconds / 60);
-    unit = "m";
-  } else if (diffSeconds < 86400) {
-    value = Math.floor(diffSeconds / 3600);
-    unit = "h";
-  } else if (diffSeconds < 604800) {
-    value = Math.floor(diffSeconds / 86400);
-    unit = "d";
-  } else if (diffSeconds < 2592000) {
-    value = Math.floor(diffSeconds / 604800);
-    unit = "w";
-  } else if (diffSeconds < 31536000) {
-    value = Math.floor(diffSeconds / 2592000);
-    unit = "mo";
-  } else {
-    value = Math.floor(diffSeconds / 31536000);
-    unit = "y";
-  }
-
-  return isFuture ? `in ${value}${unit}` : `${value}${unit} ago`;
+  return dt.toLocaleString("en-US", { hour12: false });
 }
 
-function getSessionModeLabel(session: SessionStatus): string {
-  return session.session_mode === "upload_csv" ? "Uploaded CSV" : "Public Dataset";
+function formatDuration(seconds: number | null | undefined): string {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds)) {
+    return "-";
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remain = Math.round(seconds % 60);
+  return `${minutes}:${String(remain).padStart(2, "0")}`;
 }
 
-function getSessionStatusLabel(status: SessionStatus["status"]): string {
-  return status.charAt(0).toUpperCase() + status.slice(1);
+function formatFrame(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "-";
+  }
+  return Math.round(value).toLocaleString("en-US");
+}
+
+function getFrameSourceLabel(source: string | null | undefined): string {
+  if (source === "filename") return "filename";
+  if (source === "duration") return "video length";
+  return "fallback";
+}
+
+function getPersistLabel(session: SessionStatus): string {
+  if (session.session_mode !== "upload_csv") {
+    return "-";
+  }
+  return session.persist ? "Saved" : "Temporary";
 }
 
 function getSessionTitle(session: SessionStatus): string {
@@ -85,9 +73,11 @@ export function SessionCreatePage() {
   const [matches, setMatches] = useState<MatchSummary[]>([]);
   const [matchId, setMatchId] = useState("");
 
+  const [uploadVideoFile, setUploadVideoFile] = useState<File | null>(null);
   const [uploadCsvFile, setUploadCsvFile] = useState<File | null>(null);
+  const [uploadStartFrame, setUploadStartFrame] = useState("");
   const [persistUpload, setPersistUpload] = useState(true);
-  const [dragTarget, setDragTarget] = useState<"csv" | null>(null);
+  const [dragTarget, setDragTarget] = useState<"video" | "csv" | null>(null);
 
   const [creating, setCreating] = useState(false);
   const [status, setStatus] = useState<SessionStatus | null>(null);
@@ -101,7 +91,9 @@ export function SessionCreatePage() {
   const [editingTitleValue, setEditingTitleValue] = useState("");
   const [savingTitleSessionId, setSavingTitleSessionId] = useState<string | null>(null);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
-  const [relativeTimeNow, setRelativeTimeNow] = useState(() => Date.now());
+  const [pendingAlignmentSession, setPendingAlignmentSession] = useState<SessionStatus | null>(null);
+  const [alignmentStartFrame, setAlignmentStartFrame] = useState("");
+  const [savingAlignment, setSavingAlignment] = useState(false);
 
   const loadMatches = async (root?: string): Promise<MatchSummary[]> => {
     setError(null);
@@ -152,14 +144,6 @@ export function SessionCreatePage() {
     return () => {
       mounted = false;
     };
-  }, []);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setRelativeTimeNow(Date.now());
-    }, 10000);
-
-    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -218,21 +202,39 @@ export function SessionCreatePage() {
   };
 
   const handleCreateUpload = async () => {
-    if (!uploadCsvFile) {
-      setError("Select a CSV file.");
+    if (!uploadVideoFile || !uploadCsvFile) {
+      setError("Select both a video file and a CSV file.");
       return;
+    }
+
+    const normalizedStartFrame = uploadStartFrame.trim();
+    let requestedStartFrame: number | undefined;
+    if (normalizedStartFrame) {
+      const parsedStartFrame = Number(normalizedStartFrame);
+      if (!Number.isFinite(parsedStartFrame) || parsedStartFrame < 0) {
+        setError("Video start frame must be a non-negative number.");
+        return;
+      }
+      requestedStartFrame = Math.round(parsedStartFrame);
     }
 
     setCreating(true);
     setError(null);
     try {
       const created = await createUploadSession({
+        videoFile: uploadVideoFile,
         csvFile: uploadCsvFile,
         persist: persistUpload,
+        videoStartFrame: requestedStartFrame,
       });
       setStatus(created);
       await loadRecentSessions();
-      navigate(buildSessionOpenUrl(created));
+      if (created.video_start_frame_confirmed || requestedStartFrame !== undefined) {
+        navigate(buildSessionOpenUrl(created));
+        return;
+      }
+      setPendingAlignmentSession(created);
+      setAlignmentStartFrame(String(created.video_start_frame ?? 0));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -240,28 +242,39 @@ export function SessionCreatePage() {
     }
   };
 
-  const applyUploadFile = (file: File | null) => {
+  const applyUploadFile = (target: "video" | "csv", file: File | null) => {
     if (!file) {
       return;
     }
 
     setError(null);
     const filename = file.name.toLowerCase();
+    if (target === "video") {
+      const validVideo = [".mp4", ".mov", ".m4v", ".webm"].some((ext) => filename.endsWith(ext));
+      if (!validVideo) {
+        setError("Video file must be mp4, mov, m4v, or webm.");
+        return;
+      }
+      setUploadVideoFile(file);
+      setPendingAlignmentSession(null);
+      return;
+    }
 
     if (!filename.endsWith(".csv")) {
       setError("CSV file must use the .csv extension.");
       return;
     }
     setUploadCsvFile(file);
+    setPendingAlignmentSession(null);
   };
 
-  const handleUploadDragOver = (target: "csv") => (event: DragEvent<HTMLElement>) => {
+  const handleUploadDragOver = (target: "video" | "csv") => (event: DragEvent<HTMLElement>) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
     setDragTarget(target);
   };
 
-  const handleUploadDragLeave = (target: "csv") => (event: DragEvent<HTMLElement>) => {
+  const handleUploadDragLeave = (target: "video" | "csv") => (event: DragEvent<HTMLElement>) => {
     event.preventDefault();
     const nextTarget = event.relatedTarget;
     if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
@@ -272,10 +285,10 @@ export function SessionCreatePage() {
     }
   };
 
-  const handleUploadDrop = () => (event: DragEvent<HTMLElement>) => {
+  const handleUploadDrop = (target: "video" | "csv") => (event: DragEvent<HTMLElement>) => {
     event.preventDefault();
     setDragTarget(null);
-    applyUploadFile(event.dataTransfer.files?.[0] ?? null);
+    applyUploadFile(target, event.dataTransfer.files?.[0] ?? null);
   };
 
   const handleOpenLatest = async () => {
@@ -340,10 +353,42 @@ export function SessionCreatePage() {
       if (editingTitleSessionId === session.session_id) {
         cancelTitleEdit();
       }
+      if (pendingAlignmentSession?.session_id === session.session_id) {
+        setPendingAlignmentSession(null);
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setDeletingSessionId(null);
+    }
+  };
+
+  const handleApplyAlignment = async () => {
+    if (!pendingAlignmentSession) {
+      return;
+    }
+
+    const parsed = Number(alignmentStartFrame);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      setError("Video start frame must be a non-negative number.");
+      return;
+    }
+
+    const videoStartFrame = Math.round(parsed);
+    setSavingAlignment(true);
+    setError(null);
+    try {
+      const updated = await updateSessionMetadata(pendingAlignmentSession.session_id, {
+        video_start_frame: videoStartFrame,
+      });
+      setPendingAlignmentSession(null);
+      setStatus(updated);
+      setRecentSessions((prev) => prev.map((item) => (item.session_id === updated.session_id ? updated : item)));
+      navigate(buildSessionOpenUrl(updated));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSavingAlignment(false);
     }
   };
 
@@ -433,6 +478,37 @@ export function SessionCreatePage() {
               <label
                 className={[
                   "upload-card",
+                  "upload-card-video",
+                  dragTarget === "video" ? "drag-active" : "",
+                  uploadVideoFile ? "has-file" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                onDragEnter={handleUploadDragOver("video")}
+                onDragOver={handleUploadDragOver("video")}
+                onDragLeave={handleUploadDragLeave("video")}
+                onDrop={handleUploadDrop("video")}
+              >
+                <span className="upload-card-header">
+                  <span className="upload-card-label">Video</span>
+                  {uploadVideoFile ? <span className="upload-card-state">Selected</span> : null}
+                </span>
+                <span className="upload-card-value">
+                  {uploadVideoFile?.name ?? "Drop file or click"}
+                </span>
+                <span className="upload-card-meta">
+                  {uploadVideoFile ? "Choose another file" : "MP4, MOV, M4V, WEBM"}
+                </span>
+                <input
+                  type="file"
+                  accept=".mp4,.mov,.m4v,.webm,video/*"
+                  onChange={(e) => applyUploadFile("video", e.target.files?.[0] ?? null)}
+                />
+              </label>
+
+              <label
+                className={[
+                  "upload-card",
                   "upload-card-csv",
                   dragTarget === "csv" ? "drag-active" : "",
                   uploadCsvFile ? "has-file" : "",
@@ -442,7 +518,7 @@ export function SessionCreatePage() {
                 onDragEnter={handleUploadDragOver("csv")}
                 onDragOver={handleUploadDragOver("csv")}
                 onDragLeave={handleUploadDragLeave("csv")}
-                onDrop={handleUploadDrop()}
+                onDrop={handleUploadDrop("csv")}
               >
                 <span className="upload-card-header">
                   <span className="upload-card-label">CSV</span>
@@ -457,7 +533,7 @@ export function SessionCreatePage() {
                 <input
                   type="file"
                   accept=".csv,text/csv"
-                  onChange={(e) => applyUploadFile(e.target.files?.[0] ?? null)}
+                  onChange={(e) => applyUploadFile("csv", e.target.files?.[0] ?? null)}
                 />
               </label>
             </div>
@@ -466,6 +542,16 @@ export function SessionCreatePage() {
               <button type="button" className="primary" onClick={handleCreateUpload} disabled={creating}>
                 {creating ? "Uploading..." : "Open in Editor"}
               </button>
+              <label className="upload-start-frame-field">
+                Start frame
+                <input
+                  type="number"
+                  min={0}
+                  value={uploadStartFrame}
+                  onChange={(e) => setUploadStartFrame(e.target.value)}
+                  placeholder="Optional"
+                />
+              </label>
               <label className="check-row compact-check">
                 <input
                   type="checkbox"
@@ -475,134 +561,164 @@ export function SessionCreatePage() {
                 Keep on server
               </label>
             </div>
+
+            {pendingAlignmentSession && (
+              <div className="alignment-panel">
+                <div className="alignment-panel-main">
+                  <div>
+                    <h3>Frame Alignment</h3>
+                    <p className="muted compact-note">
+                      Suggested from {getFrameSourceLabel(pendingAlignmentSession.video_start_frame_source)}
+                    </p>
+                  </div>
+                  <label>
+                    Video start frame
+                    <input
+                      type="number"
+                      min={0}
+                      value={alignmentStartFrame}
+                      onChange={(event) => setAlignmentStartFrame(event.target.value)}
+                      disabled={savingAlignment}
+                    />
+                  </label>
+                </div>
+                <div className="alignment-meta">
+                  <span>{pendingAlignmentSession.original_video_filename ?? "uploaded video"}</span>
+                  <span>{pendingAlignmentSession.fps ?? 25} fps</span>
+                  <span>{formatDuration(pendingAlignmentSession.video_duration_seconds)}</span>
+                  <span>{formatFrame(pendingAlignmentSession.video_frame_count)} frames</span>
+                </div>
+                <div className="create-actions upload-actions">
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={() => void handleApplyAlignment()}
+                    disabled={savingAlignment}
+                  >
+                    {savingAlignment ? "Applying..." : "Apply & Open"}
+                  </button>
+                  <span className="muted compact-note">CSV frames stay unchanged.</span>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </section>
 
-      <section className="card recent-panel">
-        <div className="section-header recent-session-header">
-          <div>
+      {createMode === "existing" ? (
+        <section className="card recent-panel">
+          <div className="section-header">
             <h2>Recent Sessions</h2>
-            <p className="muted panel-copy">Jump back into recent work without rebuilding the same setup.</p>
+            <button type="button" onClick={() => void loadRecentSessions()} disabled={loadingRecentSessions}>
+              {loadingRecentSessions ? "Refreshing..." : "Refresh List"}
+            </button>
           </div>
-          <button
-            type="button"
-            className="recent-session-refresh"
-            onClick={() => void loadRecentSessions()}
-            disabled={loadingRecentSessions}
-          >
-            {loadingRecentSessions ? "Refreshing..." : "Refresh"}
-          </button>
-        </div>
-
-        {recentSessions.length > 0 ? (
-          <div className="recent-session-list">
-            {recentSessions.map((session) => {
-              const openUrl = buildSessionOpenUrl(session);
-              const isEditingTitle = editingTitleSessionId === session.session_id;
-              const isSavingTitle = savingTitleSessionId === session.session_id;
-              const isDeleting = deletingSessionId === session.session_id;
-              const titleLabel = getSessionTitle(session);
-              return (
-                <article
-                  key={session.session_id}
-                  className={`recent-session-item${isDeleting ? " is-busy" : ""}`}
-                >
-                  <div className="recent-session-main">
-                    {isEditingTitle ? (
-                      <div className="session-title-editor recent-session-title-editor">
-                        <input
-                          value={editingTitleValue}
-                          onChange={(e) => setEditingTitleValue(e.target.value)}
-                          placeholder={titleLabel}
-                          disabled={isSavingTitle || isDeleting}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              void saveTitleEdit(session);
-                            }
-                            if (event.key === "Escape") {
-                              event.preventDefault();
-                              cancelTitleEdit();
-                            }
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <h3 className="recent-session-title">{titleLabel}</h3>
-                    )}
-
-                    <div className="recent-session-meta">
-                      <span className={`recent-session-status recent-session-status-${session.status}`}>
-                        {getSessionStatusLabel(session.status)}
-                      </span>
-                      <span className="recent-session-pill">{getSessionModeLabel(session)}</span>
-                      <span className="recent-session-pill">{formatRelativeTime(session.updated_at, relativeTimeNow)}</span>
-                    </div>
-
-                    <div className="recent-session-supporting">
-                      <span>Session ID {session.session_id}</span>
-                    </div>
-                  </div>
-
-                  <div className="recent-session-actions">
-                    {isEditingTitle ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => void saveTitleEdit(session)}
-                          disabled={isSavingTitle || isDeleting}
-                        >
-                          {isSavingTitle ? "Saving..." : "Save"}
-                        </button>
-                        <button type="button" onClick={cancelTitleEdit} disabled={isSavingTitle || isDeleting}>
-                          Cancel
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <a
-                          className="button-link primary recent-session-open"
-                          href={openUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          aria-disabled={isDeleting}
-                          onClick={(event) => {
-                            if (isDeleting) {
-                              event.preventDefault();
-                            }
-                          }}
-                        >
+          <div className="table-wrap session-table-wrap">
+            <table className="event-table session-table">
+              <thead>
+                <tr>
+                  <th>Updated</th>
+                  <th>Title</th>
+                  <th>Session ID</th>
+                  <th>Status</th>
+                  <th>Persist</th>
+                  <th>Open</th>
+                  <th>Delete</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentSessions.map((session) => {
+                  const openUrl = `/annotate/${encodeURIComponent(session.session_id)}`;
+                  const isEditingTitle = editingTitleSessionId === session.session_id;
+                  const isSavingTitle = savingTitleSessionId === session.session_id;
+                  const isDeleting = deletingSessionId === session.session_id;
+                  const titleLabel = getSessionTitle(session);
+                  return (
+                    <tr key={session.session_id}>
+                      <td>{formatDateTime(session.updated_at)}</td>
+                      <td className="session-title-cell">
+                        {isEditingTitle ? (
+                          <div className="session-title-editor">
+                            <input
+                              value={editingTitleValue}
+                              onChange={(e) => setEditingTitleValue(e.target.value)}
+                              placeholder={titleLabel}
+                              disabled={isSavingTitle || isDeleting}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  void saveTitleEdit(session);
+                                }
+                                if (event.key === "Escape") {
+                                  event.preventDefault();
+                                  cancelTitleEdit();
+                                }
+                              }}
+                            />
+                            <div className="session-title-actions">
+                              <button
+                                type="button"
+                                onClick={() => void saveTitleEdit(session)}
+                                disabled={isSavingTitle || isDeleting}
+                              >
+                                {isSavingTitle ? "Saving..." : "Save"}
+                              </button>
+                              <button type="button" onClick={cancelTitleEdit} disabled={isSavingTitle || isDeleting}>
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="session-title-display">
+                            <span className="event-cell-primary">{titleLabel}</span>
+                            <button
+                              type="button"
+                              className="session-title-edit-button"
+                              onClick={() => beginTitleEdit(session)}
+                              disabled={isDeleting}
+                            >
+                              Edit
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                      <td>{session.session_id}</td>
+                      <td title={session.progress ?? undefined}>
+                        {session.status}
+                        {session.progress ? <div className="event-cell-secondary">{session.progress}</div> : null}
+                      </td>
+                      <td>{getPersistLabel(session)}</td>
+                      <td>
+                        <a href={openUrl} target="_blank" rel="noreferrer" aria-disabled={isDeleting}>
                           Open
                         </a>
+                      </td>
+                      <td>
                         <button
                           type="button"
-                          className="session-title-edit-button"
-                          onClick={() => beginTitleEdit(session)}
-                          disabled={isDeleting}
+                          className="danger session-delete-button"
+                          onClick={() => void handleDeleteSession(session)}
+                          disabled={isDeleting || session.status === "processing"}
+                          title={session.status === "processing" ? "Processing sessions cannot be deleted." : undefined}
                         >
-                          Edit Title
+                          {isDeleting ? "Deleting..." : "Delete"}
                         </button>
-                      </>
-                    )}
-
-                    <button
-                      type="button"
-                      className="danger session-delete-button"
-                      onClick={() => void handleDeleteSession(session)}
-                      disabled={isDeleting || isSavingTitle}
-                    >
-                      {isDeleting ? "Deleting..." : "Delete"}
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {recentSessions.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="muted">
+                      Empty
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
-        ) : (
-          <div className="recent-session-empty muted">No recent sessions yet.</div>
-        )}
-      </section>
+        </section>
+      ) : null}
 
       {error && <pre className="error-box">{error}</pre>}
     </div>

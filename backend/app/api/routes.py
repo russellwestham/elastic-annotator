@@ -126,8 +126,7 @@ def _session_has_video_artifact(metadata: dict) -> bool:
 
 def _ready_integrity_reasons(metadata: dict) -> list[str]:
     reasons: list[str] = []
-    session_mode = metadata.get("session_mode")
-    if session_mode != "upload_csv" and not _session_has_video_artifact(metadata):
+    if not _session_has_video_artifact(metadata):
         reasons.append("video_not_prepared")
     return reasons
 
@@ -258,14 +257,18 @@ def create_session(request: SessionCreateRequest) -> SessionStatusResponse:
     responses={400: {"model": ErrorResponse}},
 )
 def create_upload_session(
+    video_file: UploadFile = File(...),
     csv_file: UploadFile = File(...),
     persist: bool = Form(default=False),
     session_name: str | None = Form(default=None),
+    video_start_frame: int | None = Form(default=None),
 ) -> SessionStatusResponse:
     metadata = upload_sessions.create_upload_session(
+        video_file=video_file,
         csv_file=csv_file,
         persist=persist,
         session_name=session_name,
+        video_start_frame=video_start_frame,
     )
     metadata = _normalize_session_integrity(metadata)
     return _to_status_response(metadata)
