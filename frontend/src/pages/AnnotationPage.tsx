@@ -626,7 +626,7 @@ export function AnnotationPage() {
     });
   }, [videoSegments]);
   const showVideoUploader = isUploadSession || !!videoUrl;
-  const videoUploadLabel = videoUrl ? "Replace or add video" : "Add first video";
+
 
   const playheadStartFrame = activeVideoSegment?.start_frame ?? 0;
   const currentFrame = useMemo(
