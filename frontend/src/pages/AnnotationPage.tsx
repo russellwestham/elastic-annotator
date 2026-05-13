@@ -80,13 +80,15 @@ function getSegmentFrameFromTime(seconds: number, fps: number): number {
 }
 
 function getSeekTimeForSegmentFrame(segmentFrame: number, fps: number, duration: number): number {
-  const centeredTime = (Math.max(0, segmentFrame) + 0.5) / fps;
+  // Use exact frame time so the timestamp perfectly matches frame * (1/fps).
+  // We add a tiny epsilon (0.0001) instead of 0.5 to avoid showing the previous frame in some browsers.
+  const exactTime = (Math.max(0, segmentFrame) + 0.0001) / fps;
   if (!Number.isFinite(duration) || duration <= 0) {
-    return centeredTime;
+    return exactTime;
   }
 
   const maxTime = Math.max(0, duration - Math.min(0.001, 0.25 / fps));
-  return Math.min(centeredTime, maxTime);
+  return Math.min(exactTime, maxTime);
 }
 
 function supportsVideoFrameCallback(videoEl: HTMLVideoElement): videoEl is FrameCallbackVideoElement {
