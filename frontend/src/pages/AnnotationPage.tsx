@@ -1537,7 +1537,7 @@ export function AnnotationPage() {
     const basePeriod = selectedRow?.period_id ?? 1;
     const selectedReceiveTs = selectedRow?.receive_ts?.trim() ?? "";
     const selectedReceiveFrame = selectedRow?.receive_frame_id;
-    const defaultSyncedFrame = typeof selectedReceiveFrame === "number" ? selectedReceiveFrame : currentFrame;
+    const defaultSyncedFrame = typeof selectedReceiveFrame === "number" ? selectedReceiveFrame + 1 : currentFrame;
     const computedSyncedTs = getEventTimestampForFrame(defaultSyncedFrame, basePeriod);
     const selectedReceiveSec = parseTimestampToSeconds(selectedReceiveTs);
     const computedSyncedSec = parseTimestampToSeconds(computedSyncedTs);
@@ -1552,7 +1552,7 @@ export function AnnotationPage() {
     const newRow: EventRow = {
       id: `missing_${Date.now()}`,
       period_id: basePeriod,
-      spadl_type: "pass",
+      spadl_type: "control",
       player_id: defaultPlayerId,
       synced_frame_id: defaultSyncedFrame,
       synced_ts: defaultSyncedTs,
