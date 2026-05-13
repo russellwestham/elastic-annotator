@@ -594,8 +594,7 @@ class UploadSessionService:
                 synced_ts = frame_to_timestamp(synced_frame_id, fps)
 
             if synced_frame_id is None and synced_ts is None:
-                warnings.append(f"row {index}: skipped because synced_frame_id/synced_ts is missing")
-                continue
+                warnings.append(f"row {index}: synced_frame_id/synced_ts is missing, but kept for annotation")
 
             receive_frame_id = self._parse_int(self._canonical_value(row, "receive_frame_id"))
             receive_ts_raw = self._canonical_value(row, "receive_ts")

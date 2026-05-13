@@ -536,12 +536,28 @@ class ElasticPipelineService:
             if pd.isna(receive_ts):
                 receive_ts = frame_to_timestamp(receive_frame_id, fps)
 
+            # Defensive handling for potentially NaN metadata fields
+            period_id = 1
+            if pd.notna(row.get("period_id")):
+                try:
+                    period_id = int(row["period_id"])
+                except (ValueError, TypeError):
+                    period_id = 1
+
+            spadl_type = str(row.get("spadl_type", ""))
+            if not spadl_type or spadl_type == "nan":
+                spadl_type = "unknown"
+
+            player_id = str(row.get("player_id", ""))
+            if not player_id or player_id == "nan":
+                player_id = "unknown"
+
             rows.append(
                 {
                     "id": f"ev_{idx + 1:05d}",
-                    "period_id": int(row["period_id"]),
-                    "spadl_type": str(row["spadl_type"]),
-                    "player_id": str(row["player_id"]),
+                    "period_id": period_id,
+                    "spadl_type": spadl_type,
+                    "player_id": player_id,
                     "synced_frame_id": synced_frame_id,
                     "synced_ts": synced_ts,
                     "receiver_id": None if pd.isna(row.get("receiver_id")) else str(row.get("receiver_id")),
