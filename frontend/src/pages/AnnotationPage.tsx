@@ -1030,6 +1030,11 @@ export function AnnotationPage() {
     // Auto-follow only when frame/events change. Avoid overriding manual row click
     // simply because selectedIndex changed in the same frame.
     setSelectedIndex((prev) => {
+      // If the current selection is already at the correct frame, don't jump to another event at the same frame.
+      const prevRow = events[prev];
+      if (prevRow && getAnchorFrame(prevRow) === currentFrame) {
+        return prev;
+      }
       return prev === targetIndex ? prev : targetIndex;
     });
   }, [currentFrame, events, hasPendingRowChanges]);
@@ -1563,7 +1568,12 @@ export function AnnotationPage() {
       }
     }
 
-    const defaultPlayerId = (selectedRow?.receiver_id?.trim() || selectedRow?.player_id || "").trim();
+    const defaultPlayerId = (
+      nextRow?.player_id?.trim()
+      || selectedRow?.receiver_id?.trim()
+      || selectedRow?.player_id
+      || ""
+    ).trim();
 
     const newRow: EventRow = {
       id: `missing_${Date.now()}`,
