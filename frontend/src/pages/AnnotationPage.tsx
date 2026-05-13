@@ -1146,6 +1146,12 @@ export function AnnotationPage() {
       if (!prev) return prev;
       const merged = { ...prev, ...patch };
 
+      // Force 'missing' error_type for newly added missing events
+      if (prev.id.toString().startsWith("missing_")) {
+        merged.error_type = "missing";
+        return merged;
+      }
+
       // Respect explicit user selection in error_type dropdown.
       if ("error_type" in patch) {
         return merged;
@@ -2186,6 +2192,7 @@ export function AnnotationPage() {
                   <label>
                     error_type
                     <select
+                      disabled={draftRow?.id?.toString().startsWith("missing_") ?? selectedRow.id?.toString().startsWith("missing_") ?? false}
                       value={draftRow ? (draftRow.error_type ?? "") : (selectedRow.error_type ?? "")}
                       onChange={(e) => updateDraftRow({ error_type: (e.target.value || null) as ErrorType | null })}
                     >
