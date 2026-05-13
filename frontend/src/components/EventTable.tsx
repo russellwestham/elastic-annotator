@@ -64,7 +64,6 @@ export function EventTable({
           {rows.map((row, index) => {
             const anchorFrame = getAnchorFrame(row);
             const frameDelta = anchorFrame === null ? null : anchorFrame - currentFrame;
-            const isFrameMatch = frameDelta !== null && Math.abs(frameDelta) <= 1;
 
             return (
               <tr
@@ -75,14 +74,13 @@ export function EventTable({
                 className={[
                   index === selectedIndex ? "selected" : "",
                   index === selectedIndex && !selectedRowHasVideoCoverage ? "selected-uncovered" : "",
-                  isFrameMatch ? "frame-match" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
                 onClick={() => onSelect(index)}
               >
                 <td>{index + 1}</td>
-                <td className={isFrameMatch ? "delta-match" : ""}>
+                <td>
                   {frameDelta === null ? "-" : `${frameDelta > 0 ? "+" : ""}${frameDelta}`}
                 </td>
                 <td>{row.period_id}</td>
