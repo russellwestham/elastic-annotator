@@ -1820,6 +1820,11 @@ export function AnnotationPage() {
                   ref={videoRef}
                   src={videoUrl}
                   controls
+                  onMouseDown={(e) => {
+                    // Prevent video element from keeping focus and using browser default hotkeys
+                    const el = e.currentTarget;
+                    setTimeout(() => el.blur(), 0);
+                  }}
                   onTimeUpdate={(e) => {
                     syncDisplayedSegmentFrame(e.currentTarget);
                   }}
