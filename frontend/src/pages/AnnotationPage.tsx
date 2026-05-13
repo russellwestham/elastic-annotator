@@ -1535,18 +1535,34 @@ export function AnnotationPage() {
 
   const addMissingRow = () => {
     const basePeriod = selectedRow?.period_id ?? 1;
+    const nextRow = selectedIndex >= 0 && selectedIndex + 1 < events.length ? events[selectedIndex + 1] : null;
+    const nextRowFrame = nextRow?.synced_frame_id;
+    
     const selectedReceiveTs = selectedRow?.receive_ts?.trim() ?? "";
     const selectedReceiveFrame = selectedRow?.receive_frame_id;
-    const defaultSyncedFrame = typeof selectedReceiveFrame === "number" ? selectedReceiveFrame + 1 : currentFrame;
+    
+    const defaultSyncedFrame = typeof nextRowFrame === "number" 
+      ? nextRowFrame 
+      : (typeof selectedReceiveFrame === "number" ? selectedReceiveFrame + 1 : currentFrame);
+      
     const computedSyncedTs = getEventTimestampForFrame(defaultSyncedFrame, basePeriod);
-    const selectedReceiveSec = parseTimestampToSeconds(selectedReceiveTs);
-    const computedSyncedSec = parseTimestampToSeconds(computedSyncedTs);
-    const canReuseSelectedReceiveTs = (
-      selectedReceiveSec !== null
-      && computedSyncedSec !== null
-      && Math.abs(selectedReceiveSec - computedSyncedSec) <= 2
-    );
-    const defaultSyncedTs = canReuseSelectedReceiveTs ? selectedReceiveTs : computedSyncedTs;
+    
+    let defaultSyncedTs = computedSyncedTs;
+    if (typeof nextRowFrame === "number" && nextRow?.synced_ts) {
+      defaultSyncedTs = nextRow.synced_ts;
+    } else {
+      const selectedReceiveSec = parseTimestampToSeconds(selectedReceiveTs);
+      const computedSyncedSec = parseTimestampToSeconds(computedSyncedTs);
+      const canReuseSelectedReceiveTs = (
+        selectedReceiveSec !== null
+        && computedSyncedSec !== null
+        && Math.abs(selectedReceiveSec - computedSyncedSec) <= 2
+      );
+      if (canReuseSelectedReceiveTs) {
+        defaultSyncedTs = selectedReceiveTs;
+      }
+    }
+
     const defaultPlayerId = (selectedRow?.receiver_id?.trim() || selectedRow?.player_id || "").trim();
 
     const newRow: EventRow = {
