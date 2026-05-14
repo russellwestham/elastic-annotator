@@ -231,8 +231,7 @@ export function SessionCreatePage() {
         persist: persistUpload,
       });
       setStatus(created);
-      await loadRecentSessions();
-      navigate(buildSessionOpenUrl(created));
+      window.location.assign(buildSessionOpenUrl(created));
     } catch (err) {
       setError((err as Error).message);
     } finally {
