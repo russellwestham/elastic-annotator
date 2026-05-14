@@ -53,6 +53,7 @@ DEPLOY_SHA="$(git rev-parse --short HEAD)"
 echo "deploying commit: $DEPLOY_SHA"
 
 "$UV_BIN" sync
+"$UV_BIN" run python deploy/backfill_upload_csv_missing_sync_anchors.py
 
 cd frontend
 install_ok=false

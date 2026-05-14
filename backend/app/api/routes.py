@@ -621,6 +621,7 @@ def get_events(
         metadata = store.load_metadata(session_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    metadata = upload_sessions.backfill_upload_csv_missing_sync_anchors(session_id, metadata)
 
     if variant == "initial":
         try:

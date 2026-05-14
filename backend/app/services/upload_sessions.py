@@ -651,6 +651,118 @@ class UploadSessionService:
 
         return events, warnings
 
+    @staticmethod
+    def _is_missing_sync_anchor_event(event: dict[str, Any]) -> bool:
+        return event.get("synced_frame_id") is None and not str(event.get("synced_ts") or "").strip()
+
+    @classmethod
+    def _same_missing_sync_anchor_event(cls, left: dict[str, Any], right: dict[str, Any]) -> bool:
+        if not cls._is_missing_sync_anchor_event(left) or not cls._is_missing_sync_anchor_event(right):
+            return False
+        return (
+            left.get("period_id") == right.get("period_id")
+            and str(left.get("spadl_type") or "") == str(right.get("spadl_type") or "")
+            and str(left.get("player_id") or "") == str(right.get("player_id") or "")
+            and str(left.get("receiver_id") or "") == str(right.get("receiver_id") or "")
+            and bool(left.get("outcome")) == bool(right.get("outcome"))
+        )
+
+    @staticmethod
+    def _dedupe_event_id(base_id: str, existing_ids: set[str]) -> str:
+        candidate = base_id
+        suffix = 2
+        while candidate in existing_ids:
+            candidate = f"{base_id}_{suffix}"
+            suffix += 1
+        existing_ids.add(candidate)
+        return candidate
+
+    def _backfill_missing_sync_anchor_events(
+        self,
+        events: list[dict[str, Any]],
+        parsed_events: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], bool]:
+        missing_positions = [
+            (index, row)
+            for index, row in enumerate(parsed_events)
+            if self._is_missing_sync_anchor_event(row)
+        ]
+        if not missing_positions:
+            return events, False
+
+        result = [dict(row) for row in events]
+        existing_ids = {str(row.get("id") or "") for row in result if row.get("id")}
+        changed = False
+
+        for parsed_index, parsed_row in missing_positions:
+            base_id = f"csv_missing_{parsed_index + 1:05d}"
+            if base_id in existing_ids:
+                continue
+
+            nearby_start = max(0, parsed_index - 3)
+            nearby_end = min(len(result), parsed_index + 4)
+            if any(
+                self._same_missing_sync_anchor_event(candidate, parsed_row)
+                for candidate in result[nearby_start:nearby_end]
+            ):
+                continue
+
+            restored = dict(parsed_row)
+            restored["id"] = self._dedupe_event_id(base_id, existing_ids)
+            insert_at = min(parsed_index, len(result))
+            result.insert(insert_at, restored)
+            changed = True
+
+        return result, changed
+
+    def backfill_upload_csv_missing_sync_anchors(
+        self,
+        session_id: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        if metadata.get("session_mode") != "upload_csv":
+            return metadata
+
+        csv_path = self.store.session_dir(session_id) / "uploaded_events.csv"
+        if not csv_path.exists():
+            return metadata
+
+        fps = self._parse_positive_float(metadata.get("fps")) or DEFAULT_FPS
+        parsed_events, warnings = self.load_events_from_csv(csv_path, fps)
+
+        current_events = self.store.load_events(session_id)
+        restored_current, current_changed = self._backfill_missing_sync_anchor_events(
+            current_events,
+            parsed_events,
+        )
+        if current_changed:
+            self.store.save_events(session_id, restored_current)
+
+        try:
+            initial_events = self.store.load_initial_events(session_id)
+        except FileNotFoundError:
+            initial_events = []
+        restored_initial, initial_changed = self._backfill_missing_sync_anchor_events(
+            initial_events,
+            parsed_events,
+        )
+        if initial_changed:
+            self.store.save_initial_events(session_id, restored_initial)
+
+        if not current_changed and not initial_changed:
+            return metadata
+
+        merged_warnings = list(metadata.get("validation_warnings") or [])
+        for warning in warnings:
+            if warning not in merged_warnings:
+                merged_warnings.append(warning)
+
+        return self.store.update_metadata(
+            session_id,
+            event_count=len(restored_current),
+            validation_warnings=merged_warnings,
+        )
+
     def create_upload_session(
         self,
         *,
