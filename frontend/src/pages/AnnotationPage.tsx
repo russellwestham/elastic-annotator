@@ -12,6 +12,7 @@ import {
   fetchSpadlTypes,
   resetEvents,
   saveEvents,
+  undoEvents,
   updateSessionMetadata,
   updateSessionVideoTiming,
 } from "../api";
@@ -465,6 +466,7 @@ export function AnnotationPage() {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveMessage, setSaveMessage] = useState("");
   const [resettingTimeline, setResettingTimeline] = useState(false);
+  const [undoingTimeline, setUndoingTimeline] = useState(false);
 
   const [dirty, setDirty] = useState(false);
   const [initialLoaded, setInitialLoaded] = useState(false);
@@ -661,6 +663,17 @@ export function AnnotationPage() {
   const sessionLabel = getSessionTitle(session);
   const originalCsvExportUrl = sessionId ? buildSessionCsvExportUrl(sessionId, "initial") : "";
   const editedCsvExportUrl = sessionId ? buildSessionCsvExportUrl(sessionId, "current") : "";
+  const undoTimelineAvailable = !!session?.event_undo_available;
+  const canUndoTimeline = undoTimelineAvailable
+    && !undoingTimeline
+    && !resettingTimeline
+    && !deletingCurrentSession
+    && saveState !== "saving";
+  const undoTimelineTitle = !undoTimelineAvailable
+    ? "No saved edit to undo yet."
+    : dirty || hasPendingRowChanges
+      ? "Discard unsaved changes and restore the previous saved event state."
+      : "Restore the event state from before the last saved edit.";
   const getTimestampOffsetForPeriod = useCallback((periodId: number | null | undefined, nearFrame?: number): number => {
     const targetPeriod = typeof periodId === "number" && Number.isFinite(periodId) ? periodId : 1;
     if (typeof nearFrame === "number" && Number.isFinite(nearFrame)) {
@@ -999,6 +1012,9 @@ export function AnnotationPage() {
       try {
         const result = await saveEvents(sessionId, events);
         applyReviewFeedback(result);
+        setSession((prev) => (
+          prev ? { ...prev, event_undo_available: result.event_undo_available } : prev
+        ));
         setSaveState("saved");
         setSaveMessage(`Saved ${result.saved_count} rows`);
         setDirty(false);
@@ -1591,6 +1607,47 @@ export function AnnotationPage() {
     setDirty(true);
   };
 
+  const handleUndoTimeline = async () => {
+    if (!sessionId || !canUndoTimeline) return;
+
+    const confirmed = window.confirm(
+      dirty || hasPendingRowChanges
+        ? "Undo the last saved edit?\n\nThis will discard any unsaved changes currently on screen."
+        : "Undo the last saved edit?",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setUndoingTimeline(true);
+    setSaveState("saving");
+    try {
+      const result = await undoEvents(sessionId);
+      applyReviewFeedback(result);
+      setSaveMessage(`Undid last saved edit (${result.restored_count} rows)`);
+      const latest = await fetchSession(sessionId);
+      setSession(latest);
+      const [eventData, initialEventData] = await Promise.all([
+        fetchEvents(sessionId),
+        fetchEvents(sessionId, "initial").catch(() => null),
+      ]);
+      setEvents(eventData.events);
+      setInitialEvents(initialEventData?.events?.length ? initialEventData.events : eventData.events);
+      applyReviewFeedback(eventData);
+      setSelectedIndex((prev) => {
+        if (eventData.events.length === 0) return 0;
+        return Math.min(prev, eventData.events.length - 1);
+      });
+      setDirty(false);
+      setSaveState("saved");
+    } catch (err) {
+      setSaveState("error");
+      setSaveMessage((err as Error).message);
+    } finally {
+      setUndoingTimeline(false);
+    }
+  };
+
   const handleResetTimeline = async () => {
     if (!sessionId) return;
 
@@ -1744,9 +1801,18 @@ export function AnnotationPage() {
           <div className="annot-action-group annot-action-group-manage">
             <Link className="button-link" to="/">Back to Sessions</Link>
             <button
+              type="button"
+              onClick={() => void handleUndoTimeline()}
+              disabled={!canUndoTimeline}
+              title={undoTimelineTitle}
+            >
+              {undoingTimeline && <span className="spinner" aria-hidden="true" />}
+              {undoingTimeline ? "Undoing..." : "Undo Last Edit"}
+            </button>
+            <button
               className="danger"
               onClick={() => void handleResetTimeline()}
-              disabled={resettingTimeline || deletingCurrentSession}
+              disabled={resettingTimeline || undoingTimeline || deletingCurrentSession}
             >
               {resettingTimeline && <span className="spinner" aria-hidden="true" />}
               {resettingTimeline ? "Resetting..." : "Reset to Original"}
@@ -1755,7 +1821,7 @@ export function AnnotationPage() {
               type="button"
               className="danger"
               onClick={() => void handleDeleteCurrentSession()}
-              disabled={deletingCurrentSession || savingTitle || saveState === "saving"}
+              disabled={deletingCurrentSession || undoingTimeline || savingTitle || saveState === "saving"}
             >
               {deletingCurrentSession && <span className="spinner" aria-hidden="true" />}
               {deletingCurrentSession ? "Deleting..." : "Delete Session"}

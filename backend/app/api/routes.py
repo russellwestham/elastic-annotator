@@ -110,6 +110,8 @@ def _to_status_response(metadata: dict) -> SessionStatusResponse:
         video_duration_seconds=metadata.get("video_duration_seconds"),
         video_frame_count=metadata.get("video_frame_count"),
         video_segments=metadata.get("video_segments") or [],
+        event_undo_available=bool(metadata.get("event_undo_available", False))
+        or store.has_event_undo_snapshot(metadata["session_id"]),
     )
 
 
@@ -651,13 +653,25 @@ def save_events(session_id: str, request: EventSaveRequest) -> EventSaveResponse
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     events = [event.model_dump() for event in request.events]
+    current_events = store.load_events(session_id)
+    undo_available = bool(metadata.get("event_undo_available", False)) or store.has_event_undo_snapshot(session_id)
+    if current_events != events:
+        store.save_event_undo_snapshot(session_id, current_events, source="save")
+        undo_available = True
+
     warnings, import_notes, qa_flags = _collect_review_feedback(metadata, events)
     store.save_events(session_id, events)
-    store.update_metadata(session_id, event_count=len(events), progress="autosaved")
+    store.update_metadata(
+        session_id,
+        event_count=len(events),
+        progress="autosaved",
+        event_undo_available=undo_available,
+    )
 
     return EventSaveResponse(
         ok=True,
         saved_count=len(events),
+        event_undo_available=undo_available,
         validation_warnings=warnings,
         import_notes=import_notes,
         qa_flags=qa_flags,
@@ -671,16 +685,62 @@ def reset_events(session_id: str) -> dict[str, object]:
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    previous_events = store.load_events(session_id)
+
     try:
         events, source = pipeline.reset_events_to_initial(session_id)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if previous_events != events:
+        store.save_event_undo_snapshot(session_id, previous_events, source="reset")
+        store.update_metadata(session_id, event_undo_available=True)
 
     warnings, import_notes, qa_flags = _collect_review_feedback(metadata, events)
     return {
         "ok": True,
         "restored_count": len(events),
         "source": source,
+        "event_undo_available": previous_events != events,
+        "undo_source": "reset" if previous_events != events else None,
+        "validation_warnings": warnings,
+        "import_notes": [item.model_dump() for item in import_notes],
+        "qa_flags": [item.model_dump() for item in qa_flags],
+    }
+
+
+@router.post("/sessions/{session_id}/undo-events")
+def undo_events(session_id: str) -> dict[str, object]:
+    try:
+        store.load_metadata(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    try:
+        snapshot = store.load_event_undo_snapshot(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail="No saved edit to undo.") from exc
+
+    events = snapshot.get("events")
+    if not isinstance(events, list):
+        raise HTTPException(status_code=400, detail="Undo snapshot is invalid.")
+
+    store.save_events(session_id, events)
+    store.clear_event_undo_snapshot(session_id)
+    updated_metadata = store.update_metadata(
+        session_id,
+        event_count=len(events),
+        progress="undo_events",
+        event_undo_available=False,
+    )
+
+    warnings, import_notes, qa_flags = _collect_review_feedback(updated_metadata, events)
+    return {
+        "ok": True,
+        "restored_count": len(events),
+        "source": snapshot.get("source") or "save",
+        "created_at": snapshot.get("created_at"),
+        "event_undo_available": False,
         "validation_warnings": warnings,
         "import_notes": [item.model_dump() for item in import_notes],
         "qa_flags": [item.model_dump() for item in qa_flags],

@@ -24,6 +24,9 @@ class SessionStore:
     def initial_events_path(self, session_id: str) -> Path:
         return self.session_dir(session_id) / "initial_events.json"
 
+    def event_undo_path(self, session_id: str) -> Path:
+        return self.session_dir(session_id) / "events_undo.json"
+
     def create_session(
         self,
         annotator_name: str,
@@ -55,6 +58,7 @@ class SessionStore:
             "video_url": None,
             "video_urls": [],
             "video_segments": [],
+            "event_undo_available": False,
             "validation_warnings": validation_warnings or [],
             "created_at": created_at,
             "updated_at": created_at,
@@ -101,6 +105,36 @@ class SessionStore:
         path = self.session_dir(session_id) / "events.json"
         with self._lock:
             self._write_json(path, {"events": events})
+
+    def has_event_undo_snapshot(self, session_id: str) -> bool:
+        return self.event_undo_path(session_id).exists()
+
+    def save_event_undo_snapshot(
+        self,
+        session_id: str,
+        events: list[dict[str, Any]],
+        *,
+        source: str,
+    ) -> None:
+        path = self.event_undo_path(session_id)
+        payload = {
+            "events": events,
+            "source": source,
+            "created_at": self._now_iso(),
+        }
+        with self._lock:
+            self._write_json(path, payload)
+
+    def load_event_undo_snapshot(self, session_id: str) -> dict[str, Any]:
+        path = self.event_undo_path(session_id)
+        if not path.exists():
+            raise FileNotFoundError(f"No undo snapshot for session: {session_id}")
+        return self._read_json(path)
+
+    def clear_event_undo_snapshot(self, session_id: str) -> None:
+        path = self.event_undo_path(session_id)
+        with self._lock:
+            path.unlink(missing_ok=True)
 
     def load_initial_events(self, session_id: str) -> list[dict[str, Any]]:
         path = self.initial_events_path(session_id)
@@ -290,6 +324,7 @@ class SessionStore:
             "original_video_filename",
             "video_duration_seconds",
             "video_frame_count",
+            "event_undo_available",
             "validation_warnings",
             "created_at",
             "updated_at",
@@ -308,12 +343,14 @@ class SessionStore:
                     "video_url": None,
                     "video_urls": [],
                     "video_segments": [],
+                    "event_undo_available": False,
                     "updated_at": self._now_iso(),
                 }
             )
             self._write_json(metadata_path, metadata)
             self._write_json(events_path, {"events": []})
             self._write_json(initial_events_path, {"events": []})
+            self.event_undo_path(session_id).unlink(missing_ok=True)
         return metadata
 
     def _iter_metadata_paths(self) -> list[Path]:

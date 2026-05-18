@@ -57,6 +57,7 @@ export interface SessionStatus {
   video_duration_seconds?: number | null;
   video_frame_count?: number | null;
   video_segments: VideoSegment[];
+  event_undo_available: boolean;
 }
 
 export interface EventRow {

@@ -123,6 +123,7 @@ export function buildSessionOpenUrl(session: SessionStatus): string {
 export async function saveEvents(sessionId: string, events: EventRow[]): Promise<{
   ok: boolean;
   saved_count: number;
+  event_undo_available: boolean;
   validation_warnings: string[];
   import_notes: ImportNoteSummary[];
   qa_flags: QAFlagSummary[];
@@ -137,11 +138,29 @@ export async function resetEvents(sessionId: string): Promise<{
   ok: boolean;
   restored_count: number;
   source: "snapshot" | "recomputed";
+  event_undo_available: boolean;
+  undo_source?: "reset" | null;
   validation_warnings: string[];
   import_notes: ImportNoteSummary[];
   qa_flags: QAFlagSummary[];
 }> {
   return request(`/api/sessions/${sessionId}/reset-events`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function undoEvents(sessionId: string): Promise<{
+  ok: boolean;
+  restored_count: number;
+  source: "save" | "reset" | string;
+  created_at?: string | null;
+  event_undo_available: boolean;
+  validation_warnings: string[];
+  import_notes: ImportNoteSummary[];
+  qa_flags: QAFlagSummary[];
+}> {
+  return request(`/api/sessions/${sessionId}/undo-events`, {
     method: "POST",
     body: JSON.stringify({}),
   });

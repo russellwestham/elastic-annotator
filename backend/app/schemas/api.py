@@ -93,6 +93,7 @@ class SessionStatusResponse(BaseModel):
     video_duration_seconds: float | None = None
     video_frame_count: int | None = None
     video_segments: list[VideoSegmentResponse] = Field(default_factory=list)
+    event_undo_available: bool = False
 
 
 class SessionMetadataUpdateRequest(BaseModel):
@@ -141,6 +142,7 @@ class EventSaveRequest(BaseModel):
 class EventSaveResponse(BaseModel):
     ok: bool
     saved_count: int
+    event_undo_available: bool = False
     validation_warnings: list[str] = Field(default_factory=list)
     import_notes: list[ImportNoteSummary] = Field(default_factory=list)
     qa_flags: list[QAFlagSummary] = Field(default_factory=list)
