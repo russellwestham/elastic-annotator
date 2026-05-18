@@ -301,8 +301,13 @@ class ElasticPipelineService:
             if spadl_type != "pass":
                 continue
 
+            next_event = reviewable_events[index + 1]
+            next_spadl_type = str(next_event.get("spadl_type") or "").strip().lower()
+            if next_spadl_type == "foul":
+                continue
+
             current_team = self._player_team_id(event.get("player_id"))
-            next_team = self._player_team_id(reviewable_events[index + 1].get("player_id"))
+            next_team = self._player_team_id(next_event.get("player_id"))
             if current_team is None or next_team is None:
                 continue
 
