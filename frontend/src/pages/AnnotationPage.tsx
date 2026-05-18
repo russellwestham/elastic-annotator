@@ -842,6 +842,25 @@ export function AnnotationPage() {
     [activeVideoFps],
   );
 
+  const holdVideoAtEnd = useCallback(
+    (videoEl: HTMLVideoElement) => {
+      videoEl.pause();
+      const duration = videoEl.duration;
+      if (!Number.isFinite(duration) || duration <= 0) {
+        syncDisplayedSegmentFrame(videoEl);
+        return;
+      }
+
+      const finalSegmentFrame = Math.max(0, Math.round(duration * activeVideoFps) - 1);
+      const finalTime = getSeekTimeForSegmentFrame(finalSegmentFrame, activeVideoFps, duration);
+      if (Number.isFinite(finalTime) && Math.abs(videoEl.currentTime - finalTime) > 0.001) {
+        videoEl.currentTime = finalTime;
+      }
+      syncDisplayedSegmentFrame(videoEl, finalTime);
+    },
+    [activeVideoFps, syncDisplayedSegmentFrame],
+  );
+
   const seekVideoToSegmentFrame = useCallback(
     (segmentFrame: number, videoEl?: HTMLVideoElement | null) => {
       const targetVideo = videoEl ?? videoRef.current;
@@ -1898,6 +1917,9 @@ export function AnnotationPage() {
                   }}
                   onTimeUpdate={(e) => {
                     syncDisplayedSegmentFrame(e.currentTarget);
+                  }}
+                  onEnded={(e) => {
+                    holdVideoAtEnd(e.currentTarget);
                   }}
                   onSeeked={(e) => {
                     const videoEl = e.currentTarget;
