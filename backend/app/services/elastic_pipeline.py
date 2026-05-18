@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 MATCH_ID_PATTERN = re.compile(r"DFL-MAT-([A-Z0-9]+)")
 SEGMENT_FRAME_PATTERN = re.compile(r"_(\d+)-(\d+)\.mp4(?:$|\?)")
+TEAM_PLAYER_ID_PATTERN = re.compile(r"^(home|away)_\d+$")
 
 
 class ElasticPipelineService:
@@ -281,6 +282,7 @@ class ElasticPipelineService:
 
     def summarize_qa_flags(self, events: list[dict]) -> list[dict[str, object]]:
         missing_receive_frames: list[int] = []
+        pass_outcome_team_mismatch_frames: list[int] = []
         for event in events:
             spadl_type = str(event.get("spadl_type") or "")
             error_type = event.get("error_type")
@@ -288,6 +290,32 @@ class ElasticPipelineService:
                 synced_frame_id = event.get("synced_frame_id")
                 if isinstance(synced_frame_id, int):
                     missing_receive_frames.append(synced_frame_id)
+
+        reviewable_events = [
+            event
+            for event in events
+            if event.get("error_type") != "false_positive"
+        ]
+        for index, event in enumerate(reviewable_events[:-1]):
+            spadl_type = str(event.get("spadl_type") or "").strip().lower()
+            if spadl_type != "pass":
+                continue
+
+            current_team = self._player_team_id(event.get("player_id"))
+            next_team = self._player_team_id(reviewable_events[index + 1].get("player_id"))
+            if current_team is None or next_team is None:
+                continue
+
+            same_team_next = current_team == next_team
+            expected_same_team_next = bool(event.get("outcome"))
+            if same_team_next == expected_same_team_next:
+                continue
+
+            synced_frame_id = event.get("synced_frame_id")
+            if isinstance(synced_frame_id, int):
+                pass_outcome_team_mismatch_frames.append(synced_frame_id)
+            else:
+                pass_outcome_team_mismatch_frames.append(-1)
 
         flags: list[dict[str, object]] = []
         if missing_receive_frames:
@@ -306,7 +334,33 @@ class ElasticPipelineService:
                 }
             )
 
+        if pass_outcome_team_mismatch_frames:
+            valid_frames = [frame for frame in pass_outcome_team_mismatch_frames if frame >= 0]
+            sample_frames = sorted(set(valid_frames))[:5]
+            count = len(pass_outcome_team_mismatch_frames)
+            flags.append(
+                {
+                    "code": "pass_outcome_next_team_mismatch",
+                    "title": "Pass outcome conflicts with next team",
+                    "summary": (
+                        f"{count} pass events have an outcome that does not match the next team. "
+                        "A successful pass should usually be followed by the same team; "
+                        "an unsuccessful pass should usually be followed by the other team."
+                    ),
+                    "count": count,
+                    "sample_frame_ids": sample_frames,
+                }
+            )
+
         return flags
+
+    @staticmethod
+    def _player_team_id(player_id: object) -> str | None:
+        value = str(player_id or "").strip()
+        match = TEAM_PLAYER_ID_PATTERN.match(value)
+        if not match:
+            return None
+        return match.group(1)
 
     @staticmethod
     def _extract_match_id(filename: str) -> str | None:
