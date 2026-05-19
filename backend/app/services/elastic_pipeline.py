@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from backend.app.core.constants import PASS_LIKE_TYPES
 from backend.app.core.settings import Settings
 from backend.app.services.session_store import SessionStore
 from backend.app.utils.timecode import frame_to_timestamp
@@ -281,15 +280,7 @@ class ElasticPipelineService:
         return warnings
 
     def summarize_qa_flags(self, events: list[dict]) -> list[dict[str, object]]:
-        missing_receive_frames: list[int] = []
         pass_outcome_team_mismatch_frames: list[int] = []
-        for event in events:
-            spadl_type = str(event.get("spadl_type") or "")
-            error_type = event.get("error_type")
-            if spadl_type in PASS_LIKE_TYPES and error_type != "false_positive" and not event.get("receive_ts"):
-                synced_frame_id = event.get("synced_frame_id")
-                if isinstance(synced_frame_id, int):
-                    missing_receive_frames.append(synced_frame_id)
 
         reviewable_events = [
             event
@@ -323,22 +314,6 @@ class ElasticPipelineService:
                 pass_outcome_team_mismatch_frames.append(-1)
 
         flags: list[dict[str, object]] = []
-        if missing_receive_frames:
-            sample_frames = sorted(set(missing_receive_frames))[:5]
-            count = len(missing_receive_frames)
-            flags.append(
-                {
-                    "code": "pass_like_missing_receive_ts",
-                    "title": "Pass-like events missing receive timestamp",
-                    "summary": (
-                        f"{count} pass-like events do not have receive_ts. "
-                        "Review them only if receiver timing should be aligned."
-                    ),
-                    "count": count,
-                    "sample_frame_ids": sample_frames,
-                }
-            )
-
         if pass_outcome_team_mismatch_frames:
             valid_frames = [frame for frame in pass_outcome_team_mismatch_frames if frame >= 0]
             sample_frames = sorted(set(valid_frames))[:5]
