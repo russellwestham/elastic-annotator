@@ -657,7 +657,7 @@ class UploadSessionService:
 
     @classmethod
     def _same_missing_sync_anchor_event(cls, left: dict[str, Any], right: dict[str, Any]) -> bool:
-        if not cls._is_missing_sync_anchor_event(left) or not cls._is_missing_sync_anchor_event(right):
+        if not cls._is_missing_sync_anchor_event(right):
             return False
         return (
             left.get("period_id") == right.get("period_id")
@@ -666,6 +666,16 @@ class UploadSessionService:
             and str(left.get("receiver_id") or "") == str(right.get("receiver_id") or "")
             and bool(left.get("outcome")) == bool(right.get("outcome"))
         )
+
+    @staticmethod
+    def _missing_sync_anchor_search_radius(
+        *,
+        event_count: int,
+        parsed_count: int,
+        missing_count: int,
+    ) -> int:
+        row_count_drift = abs(event_count - parsed_count)
+        return min(80, max(8, row_count_drift + missing_count + 4))
 
     @staticmethod
     def _dedupe_event_id(base_id: str, existing_ids: set[str]) -> str:
@@ -693,18 +703,42 @@ class UploadSessionService:
         result = [dict(row) for row in events]
         existing_ids = {str(row.get("id") or "") for row in result if row.get("id")}
         changed = False
+        search_radius = self._missing_sync_anchor_search_radius(
+            event_count=len(result),
+            parsed_count=len(parsed_events),
+            missing_count=len(missing_positions),
+        )
 
         for parsed_index, parsed_row in missing_positions:
             base_id = f"csv_missing_{parsed_index + 1:05d}"
+            nearby_start = max(0, parsed_index - search_radius)
+            nearby_end = min(len(result), parsed_index + search_radius + 1)
+            nearby_matches = [
+                (index, candidate)
+                for index, candidate in enumerate(result[nearby_start:nearby_end], start=nearby_start)
+                if self._same_missing_sync_anchor_event(candidate, parsed_row)
+            ]
+            has_timed_match = any(
+                not self._is_missing_sync_anchor_event(candidate)
+                for _, candidate in nearby_matches
+            )
+            if has_timed_match:
+                stale_backfill_indices = [
+                    index
+                    for index, candidate in nearby_matches
+                    if self._is_missing_sync_anchor_event(candidate)
+                    and str(candidate.get("id") or "") == base_id
+                ]
+                for index in reversed(stale_backfill_indices):
+                    removed = result.pop(index)
+                    existing_ids.discard(str(removed.get("id") or ""))
+                    changed = True
+                continue
+
             if base_id in existing_ids:
                 continue
 
-            nearby_start = max(0, parsed_index - 3)
-            nearby_end = min(len(result), parsed_index + 4)
-            if any(
-                self._same_missing_sync_anchor_event(candidate, parsed_row)
-                for candidate in result[nearby_start:nearby_end]
-            ):
+            if nearby_matches:
                 continue
 
             restored = dict(parsed_row)
