@@ -1943,7 +1943,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
               Download Original CSV
             </a>
             <a className="button-link primary" href={editedCsvExportUrl}>
-              Download Edited CSV
+              Download Annotated CSV
             </a>
           </div>
           <div className="annot-action-group annot-action-group-manage">
