@@ -380,7 +380,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
           <div className="public-page-heading">
             <h1>ELASTIC Annotator</h1>
             <p className="muted panel-copy">
-              Shared Sportec match sessions are locked for inspection and CSV download. Upload your own CSV to create an editable session.
+              Open annotation sessions, download CSV files, or upload your own CSV to create an editable session.
             </p>
           </div>
         ) : (
@@ -527,7 +527,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
             <h2>{publicMode ? "Annotation Sessions" : "Recent Sessions"}</h2>
             <p className="muted panel-copy">
               {publicMode
-                ? "Listed Sportec sessions are read-only. Sessions created from a new CSV are editable from their private link."
+                ? "Shared Sportec match sessions are locked for inspection and CSV download. Sessions created from a new CSV are editable from their private link."
                 : "Jump back into recent work without rebuilding the same setup."}
             </p>
           </div>
