@@ -77,6 +77,32 @@ function getSessionTitle(session: SessionStatus): string {
   );
 }
 
+function getPublicSessionAccessLabel(session: SessionStatus): string | null {
+  if (session.public_baseline) {
+    return "Locked Sportec";
+  }
+  if (session.public_editable) {
+    return "Editable";
+  }
+  if (session.public_source === "created") {
+    return "Private link required";
+  }
+  return null;
+}
+
+function getPublicSessionSupportingText(session: SessionStatus): string | null {
+  if (session.public_baseline) {
+    return "Inspection and CSV download only";
+  }
+  if (session.public_editable) {
+    return "Editable from this saved link";
+  }
+  if (session.public_source === "created") {
+    return "Open from the saved URL to edit";
+  }
+  return null;
+}
+
 function buildOpenUrl(session: SessionStatus, publicMode: boolean): string {
   if (!publicMode) {
     return `/admin${buildSessionOpenUrl(session)}`;
@@ -380,7 +406,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
           <div className="public-page-heading">
             <h1>ELASTIC Annotator</h1>
             <p className="muted panel-copy">
-              Open annotation sessions, download CSV files, or upload your own CSV to create an editable session.
+              Upload a CSV to create an editable session. Add video segments inside the editor after it opens.
             </p>
           </div>
         ) : (
@@ -487,7 +513,11 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
                   {uploadCsvFile?.name ?? "Drop file or click"}
                 </span>
                 <span className="upload-card-meta">
-                  {uploadCsvFile ? "Choose another file" : "Any .csv file"}
+                  {uploadCsvFile
+                    ? "Choose another file"
+                    : publicMode
+                      ? "Video upload happens inside the editor"
+                      : "Any .csv file"}
                 </span>
                 <input
                   type="file"
@@ -498,13 +528,13 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
             </div>
             <p className="muted compact-note">
               {publicMode
-                ? "New sessions open with a private edit link. Keep that URL if you want to continue editing later."
+                ? "Save the editor URL after creation. Without that link, the session opens read-only."
                 : "Create the session with CSV first. You can upload the video later inside the editor."}
             </p>
 
             <div className="create-actions upload-actions">
               <button type="button" className="primary" onClick={handleCreateUpload} disabled={creating}>
-                {creating ? "Uploading..." : publicMode ? "Create Session" : "Open in Editor"}
+                {creating ? "Uploading..." : publicMode ? "Create CSV Session" : "Open in Editor"}
               </button>
               {!publicMode && (
                 <label className="check-row compact-check">
@@ -527,7 +557,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
             <h2>{publicMode ? "Annotation Sessions" : "Recent Sessions"}</h2>
             <p className="muted panel-copy">
               {publicMode
-                ? "Shared Sportec match sessions are locked for inspection and CSV download. Sessions created from a new CSV are editable from their private link."
+                ? "Shared Sportec match sessions are locked for inspection and CSV download. New CSV sessions appear here and remain editable from their saved URL."
                 : "Jump back into recent work without rebuilding the same setup."}
             </p>
           </div>
@@ -549,10 +579,19 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
               const isSavingTitle = savingTitleSessionId === session.session_id;
               const isDeleting = deletingSessionId === session.session_id;
               const titleLabel = getSessionTitle(session);
+              const publicAccessLabel = publicMode ? getPublicSessionAccessLabel(session) : null;
+              const publicSupportingText = publicMode ? getPublicSessionSupportingText(session) : null;
               return (
                 <article
                   key={session.session_id}
-                  className={`recent-session-item${isDeleting ? " is-busy" : ""}`}
+                  className={[
+                    "recent-session-item",
+                    isDeleting ? "is-busy" : "",
+                    publicMode && session.public_baseline ? "is-public-baseline" : "",
+                    publicMode && session.public_editable ? "is-public-editable" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
                 >
                   <div className="recent-session-main">
                     {isEditingTitle ? (
@@ -582,14 +621,26 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
                       <span className={`recent-session-status recent-session-status-${session.status}`}>
                         {getSessionStatusLabel(session.status)}
                       </span>
-                      <span className="recent-session-pill">{getSessionModeLabel(session)}</span>
-                      {session.public_baseline && <span className="recent-session-pill">Read-only</span>}
-                      {session.public_editable && <span className="recent-session-pill">Editable</span>}
+                      {!publicMode && <span className="recent-session-pill">{getSessionModeLabel(session)}</span>}
+                      {publicAccessLabel && (
+                        <span
+                          className={[
+                            "recent-session-pill",
+                            session.public_baseline ? "recent-session-pill-lock" : "",
+                            session.public_editable ? "recent-session-pill-editable" : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" ")}
+                        >
+                          {publicAccessLabel}
+                        </span>
+                      )}
                       <span className="recent-session-pill">{formatRelativeTime(session.updated_at, relativeTimeNow)}</span>
                     </div>
 
                     <div className="recent-session-supporting">
                       <span>Session ID {session.session_id}</span>
+                      {publicSupportingText && <span>{publicSupportingText}</span>}
                     </div>
                   </div>
 

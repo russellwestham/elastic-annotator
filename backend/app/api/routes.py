@@ -489,11 +489,9 @@ def list_public_sessions(limit: int = Query(default=100, ge=1, le=500)) -> list[
         if _is_public_visible_for_current_release(normalized):
             visible.append(normalized)
 
-    baseline_sessions = [item for item in visible if is_public_baseline_session(item)]
-    created_sessions = [item for item in visible if not is_public_baseline_session(item)]
-    baseline_sessions.sort(key=lambda item: public_display_name(item))
-    created_sessions.sort(key=lambda item: item.get("updated_at") or item.get("created_at") or "", reverse=True)
-    ordered = [*baseline_sessions, *created_sessions]
+    visible.sort(key=public_display_name)
+    visible.sort(key=lambda item: item.get("updated_at") or item.get("created_at") or "", reverse=True)
+    ordered = visible
     return [_to_public_status_response(metadata) for metadata in ordered[:limit]]
 
 
