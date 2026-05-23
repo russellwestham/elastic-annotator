@@ -560,14 +560,14 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
     )
   );
   const resetSelectedRowTitle = !selectedRow
-    ? "No row selected."
+    ? "No event selected."
     : initialSelectedRow
-      ? "Reset this row to the original CSV values."
-      : "This row is not in the original CSV. Reset will remove it.";
+      ? "Reset this event to the original CSV values."
+      : "This event is not in the original CSV. Reset will remove it.";
   const confirmBlockedReason = isPublicReadOnly
     ? "This public session is read-only."
     : !selectedRow || !draftRow
-    ? "No row selected."
+    ? "No event selected."
     : !hasPendingRowChanges
       ? "No edits to apply."
       : !isDraftPlayerIdValid
@@ -641,7 +641,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
   }, [activeVideoSegment]);
   const segmentOptionLabels = useMemo(() => {
     return videoSegments.map((segment, idx) => {
-      const filename = segment.original_filename?.trim() || `Segment ${idx + 1}`;
+      const filename = segment.original_filename?.trim() || `Video ${idx + 1}`;
       const endFrame = getSegmentEndFrame(segment);
 
       if (hasConfirmedSegmentTiming(segment)) {
@@ -737,12 +737,12 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
   const alignWithNextEventTitle = isPublicReadOnly
     ? "This public session is read-only."
     : !selectedRow
-    ? "Select a row first."
+    ? "Select an event first."
     : nextEventIndex === null
       ? "No next event to align with."
       : !nextEventRow || typeof nextEventRow.synced_frame_id !== "number" || !Number.isFinite(nextEventRow.synced_frame_id)
         ? "The next event needs a synced_frame_id."
-        : "Align this row to the next event's synced frame.";
+        : "Align this event to the next event's synced frame.";
   const playbackPeriodId = useMemo(() => {
     const playbackIndex = findEventIndexByFrame(events, currentFrame);
     if (playbackIndex !== null) {
@@ -1002,7 +1002,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
         setDirty(canPersistRecoveredRows && normalized.changed);
         if (normalized.changed && canPersistRecoveredRows) {
           setSaveState("saved");
-          setSaveMessage("Recovered missing-row timestamps from frame_id");
+          setSaveMessage("Recovered missing-event timestamps from frame_id");
         } else if (publicMode && s.public_read_only) {
           setSaveState("idle");
           setSaveMessage("");
@@ -1061,7 +1061,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
           setDirty(canPersistRecoveredRows && normalized.changed);
           if (normalized.changed && canPersistRecoveredRows) {
             setSaveState("saved");
-            setSaveMessage("Recovered missing-row timestamps from frame_id");
+            setSaveMessage("Recovered missing-event timestamps from frame_id");
           }
         }
       }
@@ -1167,7 +1167,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
     };
     if (isSameEventRow(currentRow, alignedRow)) {
       setSaveState("idle");
-      setSaveMessage("Current row is already aligned with the next event.");
+      setSaveMessage("Current event is already aligned with the next event.");
       return;
     }
 
@@ -1176,7 +1176,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
     setDirty(true);
     setSaveState("saved");
     setSaveMessage(
-      `Aligned row #${selectedIndex + 1} with next event (#${nextEventIndex + 1})`,
+      `Aligned event #${selectedIndex + 1} with next event (#${nextEventIndex + 1})`,
     );
   }, [
     draftRow,
@@ -1272,7 +1272,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
 
     if (isSameEventRow(selectedRow, draftRow)) {
       setSaveState("idle");
-      setSaveMessage("No row changes to confirm");
+      setSaveMessage("No event changes to confirm");
       return;
     }
 
@@ -1293,7 +1293,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
     setEvents(nextEvents);
     setDirty(true);
     setSaveState("saved");
-    setSaveMessage("Row changes confirmed");
+    setSaveMessage("Event changes confirmed");
   };
 
   const resetSelectedRow = () => {
@@ -1307,21 +1307,21 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
     if (initialSelectedRow) {
       if (editableSelectedRow && isSameEventRow(editableSelectedRow, initialSelectedRow)) {
         setSaveState("idle");
-        setSaveMessage("This row is already back to its original CSV values.");
+        setSaveMessage("This event is already back to its original CSV values.");
         return;
       }
 
       if (hasPendingRowChanges && isSameEventRow(selectedRow, initialSelectedRow)) {
         setDraftRow({ ...initialSelectedRow });
         setSaveState("idle");
-        setSaveMessage(`Discarded draft changes for row #${selectedIndex + 1}`);
+        setSaveMessage(`Discarded draft changes for event #${selectedIndex + 1}`);
         return;
       }
 
       const confirmed = window.confirm(
         hasPendingRowChanges
-          ? "Discard current edits and reset this row to the original CSV values?"
-          : "Reset this row to the original CSV values?",
+          ? "Discard current edits and reset this event to the original CSV values?"
+          : "Reset this event to the original CSV values?",
       );
       if (!confirmed) {
         return;
@@ -1332,14 +1332,14 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
       setEvents(nextEvents);
       setDirty(true);
       setSaveState("saved");
-      setSaveMessage(`Reset row #${selectedIndex + 1} to the original CSV values`);
+      setSaveMessage(`Reset event #${selectedIndex + 1} to the original CSV values`);
       return;
     }
 
     const confirmed = window.confirm(
       hasPendingRowChanges
-        ? "Discard current edits and remove this row? It does not exist in the original CSV."
-        : "Remove this row? It does not exist in the original CSV.",
+        ? "Discard current edits and remove this event? It does not exist in the original CSV."
+        : "Remove this event? It does not exist in the original CSV.",
     );
     if (!confirmed) {
       return;
@@ -1352,7 +1352,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
     setSelectedIndex(nextSelectedIndex);
     setDirty(true);
     setSaveState("saved");
-    setSaveMessage(`Removed row #${selectedIndex + 1} because it is not in the original CSV`);
+    setSaveMessage(`Removed event #${selectedIndex + 1} because it is not in the original CSV`);
   };
 
   const applyCurrentTo = (field: "synced" | "receive") => {
@@ -1439,7 +1439,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
       setSelectedVideoIndex(nextIndex);
       setSegmentUploadFile(null);
       setSaveState("saved");
-      setSaveMessage("Video segment uploaded. Apply timing when you are ready.");
+      setSaveMessage("Video uploaded. Set video timing when you are ready.");
     } catch (err) {
       setSaveState("error");
       setSaveMessage((err as Error).message);
@@ -1495,7 +1495,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
         setSelectedVideoIndex(nextIndex);
       }
       setSaveState("saved");
-      setSaveMessage("Video timing applied");
+      setSaveMessage("Video timing saved");
     } catch (err) {
       setSaveState("error");
       setSaveMessage((err as Error).message);
@@ -1614,7 +1614,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
 
   const jumpToWarningFrame = (frameId: number) => {
     if (hasPendingRowChanges) {
-      const discard = window.confirm("You have unapplied changes in this row. Discard them and continue?");
+      const discard = window.confirm("You have unapplied changes in this event. Discard them and continue?");
       if (!discard) {
         return;
       }
@@ -1641,7 +1641,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
 
   const handleSelectEvent = (index: number) => {
     if (index !== selectedIndex && hasPendingRowChanges) {
-      const discard = window.confirm("You have unapplied changes in this row. Discard them and continue?");
+      const discard = window.confirm("You have unapplied changes in this event. Discard them and continue?");
       if (!discard) {
         return;
       }
@@ -1712,7 +1712,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
       return;
     }
 
-    const confirmed = window.confirm("Delete this row?");
+    const confirmed = window.confirm("Delete this event?");
     if (!confirmed) {
       return;
     }
@@ -1745,7 +1745,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
         ? await undoPublicEvents(sessionId, editToken)
         : await undoEvents(sessionId);
       applyReviewFeedback(result);
-      setSaveMessage(`Undid last saved edit (${result.restored_count} rows)`);
+      setSaveMessage(`Undid last saved edit (${result.restored_count} events)`);
       const latest = publicMode ? await fetchPublicSession(sessionId, editToken) : await fetchSession(sessionId);
       setSession(latest);
       const [eventData, initialEventData] = await Promise.all([
@@ -1793,8 +1793,8 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
       setSaveState("saved");
       setSaveMessage(
         result.source === "snapshot"
-          ? `Restored original CSV (${result.restored_count} rows)`
-          : `Restored original events (${result.restored_count} rows)`,
+          ? `Restored original CSV (${result.restored_count} events)`
+          : `Restored original events (${result.restored_count} events)`,
       );
       const latest = publicMode ? await fetchPublicSession(sessionId, editToken) : await fetchSession(sessionId);
       setSession(latest);
@@ -1907,7 +1907,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
             </div>
           )}
           <div className="annot-meta">
-            <span className="meta-pill">{events.length} rows</span>
+            <span className="meta-pill">{events.length} events</span>
             <span className="meta-pill">{isUploadSession ? "Uploaded CSV" : "Public Dataset"}</span>
             {isUploadSession && !session.persist && <span className="meta-pill">Temporary</span>}
             {saveState !== "idle" && (
@@ -1916,12 +1916,12 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                 {saveStateLabel}
               </span>
             )}
-            {publicMode && isPublicReadOnly && <span className="meta-pill">Locked</span>}
+            {publicMode && isPublicReadOnly && <span className="meta-pill">Read-only</span>}
             {publicMode && isPublicEditable && <span className="meta-pill">Editable</span>}
           </div>
           {publicMode && isPublicReadOnly && (
             <p className="annot-session-feedback">
-              This shared session is locked. You can inspect it and download CSV files.
+              This shared session is read-only. You can inspect it and download CSV files.
             </p>
           )}
           {sessionActionError ? <p className="annot-session-feedback">{sessionActionError}</p> : null}
@@ -1976,7 +1976,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
             <div className="panel-title-group">
               <h2>Video</h2>
               {!selectedRowHasVideoCoverage && selectedAnchorFrame !== null && (
-                <span className="coverage-badge" title="The selected event frame is not covered by any uploaded video segment.">
+                <span className="coverage-badge" title="The selected event frame is not covered by any uploaded video.">
                   ⚠️ No video coverage for frame {selectedAnchorFrame}
                 </span>
               )}
@@ -1985,9 +1985,9 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                   type="button"
                   className="calibration-badge pulsate"
                   onClick={scrollToCalibration}
-                  title="Click to scroll to timing calibration settings."
+                  title="Click to set video timing."
                 >
-                  ⚠️ Timing Calibration Required
+                  ⚠️ Video Timing Required
                 </button>
               )}
             </div>
@@ -1996,14 +1996,14 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
             <>
               {videoSegments.length > 1 && (
                 <label>
-                  Segment
+                  Video
                   <select
                     value={activeVideoIndex}
                     onChange={(e) => setSelectedVideoIndex(Number(e.target.value) || 0)}
                   >
                     {videoSegments.map((segment, idx) => (
                       <option key={segment.id} value={idx}>
-                        {segmentOptionLabels[idx] ?? `Segment ${idx + 1}`}
+                        {segmentOptionLabels[idx] ?? `Video ${idx + 1}`}
                       </option>
                     ))}
                   </select>
@@ -2063,9 +2063,9 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                   <div className="video-block-overlay" onClick={scrollToCalibration}>
                     <div className="overlay-content">
                       <span className="overlay-icon">⏱️</span>
-                      <h3>Timing Calibration Required</h3>
-                      <p>Please calibrate the segment timing below to sync with events.</p>
-                      <button type="button" className="secondary">Go to Calibration</button>
+                      <h3>Video Timing Required</h3>
+                      <p>Set video timing below to sync this video with events.</p>
+                      <button type="button" className="secondary">Set Video Timing</button>
                     </div>
                   </div>
                 )}
@@ -2073,16 +2073,16 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
               <div className="video-timing-panel" ref={timingCalibrationRef}>
                 <div className="video-timing-heading">
                   <div>
-                    <h3>Timing Calibration</h3>
+                    <h3>Video Timing</h3>
                     <p className="muted compact-note">
-                      Derive the segment start frame from `period start frame + video start time x 25`.
+                      Set where this video starts in match frames.
                     </p>
                   </div>
                   <div className="video-timing-status">
                     <span className={`video-timing-chip${activeVideoHasTiming ? " is-ready" : " is-pending"}`}>
-                      {activeVideoHasTiming ? "Timing Ready" : "Needs Timing"}
+                      {activeVideoHasTiming ? "Video timing set" : "Needs video timing"}
                     </span>
-                    <span className="video-timing-chip">25 fps mapping</span>
+                    <span className="video-timing-chip">25 fps</span>
                   </div>
                 </div>
                 <div className="video-timing-layout">
@@ -2120,7 +2120,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                       onClick={() => void handleApplySegmentTiming()}
                       disabled={!isPublicEditable || savingSegmentTiming || !activeVideoSegment}
                     >
-                      {savingSegmentTiming ? "Applying..." : "Apply Timing"}
+                      {savingSegmentTiming ? "Saving..." : "Save Video Timing"}
                     </button>
                   </div>
                 </div>
@@ -2152,7 +2152,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
               <h3>{isPublicReadOnly ? "No video available for this public baseline" : "Upload a video to start reviewing"}</h3>
               <p className="muted">
                 {isPublicReadOnly
-                  ? "This shared session does not include a video segment."
+                  ? "This shared session does not include a video."
                   : "Choose a video file below to enable playback and frame-level review."}
               </p>
               {!isPublicReadOnly && (
@@ -2181,7 +2181,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                 {shouldEmphasizeVideoUpload ? (
                   <span className="meta-pill">Required</span>
                 ) : (
-                  <span className="meta-pill">{videoSegments.length} segments</span>
+                  <span className="meta-pill">{videoSegments.length} videos</span>
                 )}
               </div>
             </div>
@@ -2190,7 +2190,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                 <p className="muted compact-note">
                   {shouldEmphasizeVideoUpload
                     ? "Select the first video file for this CSV session."
-                    : "Select a video file to replace or add as a new segment."}
+                    : "Select a video file to replace or add."}
                 </p>
               </div>
               <div className="upload-controls-group">
@@ -2237,7 +2237,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                   Align with Next Event
                 </button>
                 <button onClick={addMissingRow} disabled={!isPublicEditable}>Add Missing Event</button>
-                <button className="danger" disabled={!isPublicEditable || !selectedRow} onClick={removeSelectedRow}>Delete Row</button>
+                <button className="danger" disabled={!isPublicEditable || !selectedRow} onClick={removeSelectedRow}>Delete Event</button>
               </div>
             </div>
             <div className="timeline-hud">
@@ -2277,14 +2277,14 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
 
           <section className="inspector-panel card workspace-card">
             <div className="section-header">
-              <h2>{selectedRow ? `Row #${selectedIndex + 1}` : "Inspector"}</h2>
+              <h2>{selectedRow ? `Event #${selectedIndex + 1}` : "Inspector"}</h2>
               {selectedRow && (
                 <div className="section-actions">
                   <button
                     type="button"
                     onClick={resetSelectedRow}
                     disabled={!canResetSelectedRow}
-                    title={canResetSelectedRow ? resetSelectedRowTitle : "No row changes to reset."}
+                    title={canResetSelectedRow ? resetSelectedRowTitle : "No event changes to reset."}
                   >
                     Reset Event
                   </button>
@@ -2292,7 +2292,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                     className="primary"
                     onClick={confirmRowChanges}
                     disabled={!canConfirmRowChanges}
-                    title={canConfirmRowChanges ? "Apply changes to this row" : confirmBlockedReason}
+                    title={canConfirmRowChanges ? "Apply changes to this event" : confirmBlockedReason}
                   >
                     Apply Changes
                   </button>
@@ -2460,7 +2460,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                 </p>
               </>
             ) : (
-              <p className="muted">Select a row to edit.</p>
+              <p className="muted">Select an event to edit.</p>
             )}
           </section>
 

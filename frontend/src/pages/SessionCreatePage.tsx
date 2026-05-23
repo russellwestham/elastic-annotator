@@ -87,7 +87,7 @@ function getPublicSessionAccessLabel(session: SessionStatus): string | null {
     return "Editable";
   }
   if (session.public_source === "created") {
-    return "Private link required";
+    return "Edit link required";
   }
   return null;
 }
@@ -97,10 +97,10 @@ function getPublicSessionSupportingText(session: SessionStatus): string | null {
     return "Inspection and CSV download only";
   }
   if (session.public_editable) {
-    return "Editable from this saved link";
+    return "Editable with this edit link";
   }
   if (session.public_source === "created") {
-    return "Open from the saved URL to edit";
+    return "Open with the edit link to edit";
   }
   return null;
 }
@@ -162,7 +162,7 @@ function SessionListPanel({
           <h2>{publicMode ? "Annotation Sessions" : "Recent Sessions"}</h2>
           <p className="muted panel-copy">
             {publicMode
-              ? "Shared Sportec match sessions are read-only and available for CSV download. New CSV sessions appear here and stay editable from their saved URL."
+              ? "Shared Sportec match sessions are read-only and available for CSV download. New CSV sessions appear here and stay editable with their edit links."
               : "Jump back into recent work without rebuilding the same setup."}
           </p>
         </div>
@@ -810,8 +810,9 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
             <div className="edit-link-modal-header">
               <span className="edit-link-modal-kicker">Session Created</span>
               <h2 id="edit-link-modal-title">Save this edit link</h2>
-              <p>
-                This session can only be edited through this link. Save it before opening {createdEditTitle}.
+              <p className="edit-link-warning">
+                <strong>Only this edit link can modify the session.</strong>
+                <span>Save it before opening {createdEditTitle}.</span>
               </p>
             </div>
             <label className="edit-link-field">

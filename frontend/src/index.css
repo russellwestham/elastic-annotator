@@ -761,6 +761,24 @@ a.button-link.primary .spinner {
   line-height: 1.45;
 }
 
+.edit-link-modal .edit-link-warning {
+  display: grid;
+  gap: 0.16rem;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid #e6bf68;
+  border-radius: 12px;
+  background: #fff8e8;
+  color: #75430d;
+}
+
+.edit-link-warning strong {
+  color: #7c3b09;
+}
+
+.edit-link-warning span {
+  color: #855b1f;
+}
+
 .edit-link-field {
   display: grid;
   gap: 0.36rem;
@@ -2297,6 +2315,17 @@ a.button-link.primary .spinner {
   border-color: #275c3d;
   background: var(--success-soft);
   color: #a7f3c4;
+}
+
+:root[data-theme="dark"] .edit-link-modal .edit-link-warning {
+  border-color: #735224;
+  background: var(--warning-soft);
+  color: #fed7aa;
+}
+
+:root[data-theme="dark"] .edit-link-warning strong,
+:root[data-theme="dark"] .edit-link-warning span {
+  color: #fed7aa;
 }
 
 :root[data-theme="dark"] .calibration-badge,
