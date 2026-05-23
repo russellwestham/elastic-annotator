@@ -629,7 +629,8 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
           <div className="public-page-heading">
             <h1>ELASTIC Annotator</h1>
             <p className="public-page-subtitle">
-              Open the shared Sportec sessions below for read-only review, or upload an event CSV to create your own editable session.
+              Open the shared Sportec sessions below for read-only review, or{" "}
+              <strong>upload an event CSV to create your own editable session.</strong>
             </p>
           </div>
         ) : (

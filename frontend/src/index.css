@@ -410,6 +410,11 @@ a.button-link.primary .spinner {
   line-height: 1.45;
 }
 
+.public-page-subtitle strong {
+  color: var(--accent-strong);
+  font-weight: 780;
+}
+
 .public-intake-guide {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
