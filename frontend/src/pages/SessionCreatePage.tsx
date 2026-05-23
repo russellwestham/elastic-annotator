@@ -812,7 +812,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
               <span className="edit-link-modal-kicker">Session Created</span>
               <h2 id="edit-link-modal-title">Save this edit link</h2>
               <p>
-                Copy this link before opening {createdEditTitle}. It is required to edit this session later.
+                This session can only be edited through this link. Save it before opening {createdEditTitle}.
               </p>
             </div>
             <label className="edit-link-field">
