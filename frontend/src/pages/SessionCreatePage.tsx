@@ -4,10 +4,12 @@ import { useNavigate } from "react-router-dom";
 import {
   buildSessionOpenUrl,
   createSession,
+  createPublicUploadSession,
   createUploadSession,
   deleteSession,
   fetchDefaultDatasetRoot,
   fetchMatches,
+  fetchPublicSessions,
   fetchSession,
   fetchSessions,
   updateSessionMetadata,
@@ -67,6 +69,7 @@ function getSessionStatusLabel(status: SessionStatus["status"]): string {
 
 function getSessionTitle(session: SessionStatus): string {
   return (
+    session.display_name?.trim() ||
     session.session_name?.trim() ||
     session.original_video_filename?.trim() ||
     session.match_id?.trim() ||
@@ -74,10 +77,23 @@ function getSessionTitle(session: SessionStatus): string {
   );
 }
 
-export function SessionCreatePage() {
+function buildOpenUrl(session: SessionStatus, publicMode: boolean): string {
+  if (!publicMode) {
+    return `/admin${buildSessionOpenUrl(session)}`;
+  }
+  const token = session.edit_token?.trim();
+  const qs = token ? `?edit_token=${encodeURIComponent(token)}` : "";
+  return `/annotate/${encodeURIComponent(session.session_id)}${qs}`;
+}
+
+interface SessionCreatePageProps {
+  publicMode?: boolean;
+}
+
+export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps) {
   const navigate = useNavigate();
 
-  const [createMode, setCreateMode] = useState<CreateMode>("existing");
+  const [createMode, setCreateMode] = useState<CreateMode>(publicMode ? "upload" : "existing");
 
   const annotatorName = "kunhee";
   const [datasetRoot, setDatasetRoot] = useState("");
@@ -104,6 +120,9 @@ export function SessionCreatePage() {
   const [relativeTimeNow, setRelativeTimeNow] = useState(() => Date.now());
 
   const loadMatches = async (root?: string): Promise<MatchSummary[]> => {
+    if (publicMode) {
+      return [];
+    }
     setError(null);
     try {
       const found = await fetchMatches(root);
@@ -121,7 +140,9 @@ export function SessionCreatePage() {
   const loadRecentSessions = async () => {
     setLoadingRecentSessions(true);
     try {
-      const sessions = await fetchSessions({ limit: 30 });
+      const sessions = publicMode
+        ? await fetchPublicSessions({ limit: 100 })
+        : await fetchSessions({ limit: 30 });
       setRecentSessions(sessions);
     } catch (err) {
       setError((err as Error).message);
@@ -131,12 +152,17 @@ export function SessionCreatePage() {
   };
 
   useEffect(() => {
-    void loadMatches();
+    if (!publicMode) {
+      void loadMatches();
+    }
     void loadRecentSessions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
+    if (publicMode) {
+      return;
+    }
     let mounted = true;
     void fetchDefaultDatasetRoot()
       .then((info) => {
@@ -152,7 +178,7 @@ export function SessionCreatePage() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [publicMode]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -173,7 +199,7 @@ export function SessionCreatePage() {
         setStatus(next);
         if (next.status === "ready") {
           window.clearInterval(timer);
-          const openUrl = buildSessionOpenUrl(next);
+          const openUrl = buildOpenUrl(next, publicMode);
           if (openUrl.startsWith("http://") || openUrl.startsWith("https://")) {
             window.location.assign(openUrl);
           } else {
@@ -189,7 +215,7 @@ export function SessionCreatePage() {
     }, 2000);
 
     return () => window.clearInterval(timer);
-  }, [navigate, status]);
+  }, [navigate, publicMode, status]);
 
   const handleCreateExisting = async () => {
     if (!matchId) {
@@ -226,12 +252,14 @@ export function SessionCreatePage() {
     setCreating(true);
     setError(null);
     try {
-      const created = await createUploadSession({
-        csvFile: uploadCsvFile,
-        persist: persistUpload,
-      });
+      const created = publicMode
+        ? await createPublicUploadSession({ csvFile: uploadCsvFile })
+        : await createUploadSession({
+          csvFile: uploadCsvFile,
+          persist: persistUpload,
+        });
       setStatus(created);
-      window.location.assign(buildSessionOpenUrl(created));
+      window.location.assign(buildOpenUrl(created, publicMode));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -284,7 +312,7 @@ export function SessionCreatePage() {
     setOpeningLatest(true);
     setError(null);
     try {
-      navigate(`/m/${encodeURIComponent(matchId)}`);
+      navigate(`/admin/m/${encodeURIComponent(matchId)}`);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -348,34 +376,48 @@ export function SessionCreatePage() {
   return (
     <div className="page page-create">
       <section className="card create-toolbar">
-        <div className="mode-tabs" role="tablist" aria-label="Session intake mode">
-          <button
-            type="button"
-            id="session-mode-tab-existing"
-            role="tab"
-            aria-selected={createMode === "existing"}
-            aria-controls="session-mode-panel-existing"
-            tabIndex={createMode === "existing" ? 0 : -1}
-            className={`mode-tab ${createMode === "existing" ? "active" : ""}`}
-            onClick={() => setCreateMode("existing")}
-          >
-            <span className="mode-tab-title">Review Public Dataset</span>
-          </button>
-          <button
-            type="button"
-            id="session-mode-tab-upload"
-            role="tab"
-            aria-selected={createMode === "upload"}
-            aria-controls="session-mode-panel-upload"
-            tabIndex={createMode === "upload" ? 0 : -1}
-            className={`mode-tab ${createMode === "upload" ? "active" : ""}`}
-            onClick={() => setCreateMode("upload")}
-          >
-            <span className="mode-tab-title">Upload CSV & Review My Data</span>
-          </button>
-        </div>
+        {publicMode ? (
+          <div className="public-page-heading">
+            <span className="panel-kicker">Frozen Public Review</span>
+            <h1>GT Annotation Review</h1>
+            <p className="muted panel-copy">
+              Review anonymized labeling sessions and download the frozen CSV results submitted with the paper.
+            </p>
+          </div>
+        ) : (
+          <div className="mode-tabs" role="tablist" aria-label="Session intake mode">
+            <button
+              type="button"
+              id="session-mode-tab-existing"
+              role="tab"
+              aria-selected={createMode === "existing"}
+              aria-controls="session-mode-panel-existing"
+              tabIndex={createMode === "existing" ? 0 : -1}
+              className={`mode-tab ${createMode === "existing" ? "active" : ""}`}
+              onClick={() => setCreateMode("existing")}
+            >
+              <span className="mode-tab-title">Review Public Dataset</span>
+            </button>
+            <button
+              type="button"
+              id="session-mode-tab-upload"
+              role="tab"
+              aria-selected={createMode === "upload"}
+              aria-controls="session-mode-panel-upload"
+              tabIndex={createMode === "upload" ? 0 : -1}
+              className={`mode-tab ${createMode === "upload" ? "active" : ""}`}
+              onClick={() => setCreateMode("upload")}
+            >
+              <span className="mode-tab-title">Upload CSV & Review My Data</span>
+            </button>
+          </div>
+        )}
 
-        {createMode === "existing" ? (
+        {publicMode ? (
+          <p className="muted compact-note">
+            Public editing is disabled for this frozen release. Internal annotators can continue work from the protected admin app.
+          </p>
+        ) : createMode === "existing" ? (
           <div
             id="session-mode-panel-existing"
             role="tabpanel"
@@ -467,14 +509,16 @@ export function SessionCreatePage() {
               <button type="button" className="primary" onClick={handleCreateUpload} disabled={creating}>
                 {creating ? "Uploading..." : "Open in Editor"}
               </button>
-              <label className="check-row compact-check">
-                <input
-                  type="checkbox"
-                  checked={persistUpload}
-                  onChange={(e) => setPersistUpload(e.target.checked)}
-                />
-                Keep on server
-              </label>
+              {!publicMode && (
+                <label className="check-row compact-check">
+                  <input
+                    type="checkbox"
+                    checked={persistUpload}
+                    onChange={(e) => setPersistUpload(e.target.checked)}
+                  />
+                  Keep on server
+                </label>
+              )}
             </div>
           </div>
         )}
@@ -483,8 +527,12 @@ export function SessionCreatePage() {
       <section className="card recent-panel">
         <div className="section-header recent-session-header">
           <div>
-            <h2>Recent Sessions</h2>
-            <p className="muted panel-copy">Jump back into recent work without rebuilding the same setup.</p>
+            <h2>{publicMode ? "Public Sessions" : "Recent Sessions"}</h2>
+            <p className="muted panel-copy">
+              {publicMode
+                ? "Anonymized GT annotation sessions are read-only for reviewer inspection."
+                : "Jump back into recent work without rebuilding the same setup."}
+            </p>
           </div>
           <button
             type="button"
@@ -499,7 +547,7 @@ export function SessionCreatePage() {
         {recentSessions.length > 0 ? (
           <div className="recent-session-list">
             {recentSessions.map((session) => {
-              const openUrl = buildSessionOpenUrl(session);
+              const openUrl = buildOpenUrl(session, publicMode);
               const isEditingTitle = editingTitleSessionId === session.session_id;
               const isSavingTitle = savingTitleSessionId === session.session_id;
               const isDeleting = deletingSessionId === session.session_id;
@@ -538,6 +586,8 @@ export function SessionCreatePage() {
                         {getSessionStatusLabel(session.status)}
                       </span>
                       <span className="recent-session-pill">{getSessionModeLabel(session)}</span>
+                      {session.public_baseline && <span className="recent-session-pill">Read-only</span>}
+                      {session.public_editable && <span className="recent-session-pill">Editable</span>}
                       <span className="recent-session-pill">{formatRelativeTime(session.updated_at, relativeTimeNow)}</span>
                     </div>
 
@@ -576,25 +626,29 @@ export function SessionCreatePage() {
                         >
                           Open
                         </a>
-                        <button
-                          type="button"
-                          className="session-title-edit-button"
-                          onClick={() => beginTitleEdit(session)}
-                          disabled={isDeleting}
-                        >
-                          Edit Title
-                        </button>
+                        {!publicMode && (
+                          <button
+                            type="button"
+                            className="session-title-edit-button"
+                            onClick={() => beginTitleEdit(session)}
+                            disabled={isDeleting}
+                          >
+                            Edit Title
+                          </button>
+                        )}
                       </>
                     )}
 
-                    <button
-                      type="button"
-                      className="danger session-delete-button"
-                      onClick={() => void handleDeleteSession(session)}
-                      disabled={isDeleting || isSavingTitle}
-                    >
-                      {isDeleting ? "Deleting..." : "Delete"}
-                    </button>
+                    {!publicMode && (
+                      <button
+                        type="button"
+                        className="danger session-delete-button"
+                        onClick={() => void handleDeleteSession(session)}
+                        disabled={isDeleting || isSavingTitle}
+                      >
+                        {isDeleting ? "Deleting..." : "Delete"}
+                      </button>
+                    )}
                   </div>
                 </article>
               );

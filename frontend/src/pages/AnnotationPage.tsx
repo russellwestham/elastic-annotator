@@ -2,18 +2,27 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import {
+  addPublicSessionVideo,
   addSessionVideo,
   buildArtifactUrl,
+  buildPublicSessionCsvExportUrl,
   buildSessionCsvExportUrl,
   deleteSession,
   fetchEvents,
   fetchLatestSessionForMatch,
+  fetchPublicEvents,
+  fetchPublicSession,
+  fetchPublicSpadlTypes,
   fetchSession,
   fetchSpadlTypes,
+  resetPublicEvents,
   resetEvents,
+  savePublicEvents,
   saveEvents,
+  undoPublicEvents,
   undoEvents,
   updateSessionMetadata,
+  updatePublicSessionVideoTiming,
   updateSessionVideoTiming,
 } from "../api";
 import { EventTable } from "../components/EventTable";
@@ -25,6 +34,10 @@ import type {
   SessionStatus,
   VideoSegment,
 } from "../types";
+
+interface AnnotationPageProps {
+  publicMode?: boolean;
+}
 
 const ERROR_TYPES: Array<"" | ErrorType> = [
   "",
@@ -304,7 +317,8 @@ function getFrameTimestampFromSegmentTiming(frameId: number, segment: VideoSegme
 
 function getSessionTitle(session: SessionStatus | null | undefined): string {
   return (
-    session?.session_name?.trim()
+    session?.display_name?.trim()
+    || session?.session_name?.trim()
     || session?.original_video_filename?.trim()
     || session?.match_id?.trim()
     || session?.session_id
@@ -447,8 +461,12 @@ function normalizeMissingRowsByFrame(rows: EventRow[], fps: number): { rows: Eve
   return { rows: normalized, changed };
 }
 
-export function AnnotationPage() {
+export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
   const navigate = useNavigate();
+  const editToken = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("edit_token")?.trim() || null;
+  }, []);
   const { sessionId: routeSessionId = "", matchId = "" } = useParams();
   const [sessionId, setSessionId] = useState(routeSessionId);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -499,6 +517,8 @@ export function AnnotationPage() {
   const selectedRow = events[selectedIndex] ?? null;
   const fps = session?.fps ?? 25;
   const isUploadSession = session?.session_mode === "upload_csv";
+  const isPublicReadOnly = publicMode && !!session?.public_read_only;
+  const isPublicEditable = !publicMode || !!session?.public_editable;
   const hasPendingRowChanges = !!(selectedRow && draftRow && !isSameEventRow(selectedRow, draftRow));
   const selectedAnchorFrame = getAnchorFrame(selectedRow);
   const draftPlayerId = draftRow?.player_id ?? selectedRow?.player_id ?? "";
@@ -520,7 +540,8 @@ export function AnnotationPage() {
   const isDraftPlayerIdValid = isValidEntityId(draftRow?.player_id, false, knownEntityIdSet);
   const isDraftReceiverIdValid = isValidEntityId(draftRow?.receiver_id, true, knownEntityIdSet);
   const canConfirmRowChanges = !!(
-    selectedRow
+    isPublicEditable
+    && selectedRow
     && draftRow
     && hasPendingRowChanges
     && isDraftPlayerIdValid
@@ -529,7 +550,8 @@ export function AnnotationPage() {
   const initialSelectedRow = selectedRow ? initialEventById.get(selectedRow.id) ?? null : null;
   const editableSelectedRow = draftRow ?? selectedRow;
   const canResetSelectedRow = !!(
-    selectedRow
+    isPublicEditable
+    && selectedRow
     && (
       initialSelectedRow
         ? editableSelectedRow && !isSameEventRow(editableSelectedRow, initialSelectedRow)
@@ -541,7 +563,9 @@ export function AnnotationPage() {
     : initialSelectedRow
       ? "Reset this row to the original CSV values."
       : "This row is not in the original CSV. Reset will remove it.";
-  const confirmBlockedReason = !selectedRow || !draftRow
+  const confirmBlockedReason = isPublicReadOnly
+    ? "This public session is read-only."
+    : !selectedRow || !draftRow
     ? "No row selected."
     : !hasPendingRowChanges
       ? "No edits to apply."
@@ -629,7 +653,7 @@ export function AnnotationPage() {
       return `${filename}`;
     });
   }, [videoSegments]);
-  const showVideoUploader = isUploadSession || !!videoUrl;
+  const showVideoUploader = isPublicEditable && (isUploadSession || !!videoUrl);
 
 
   const playheadStartFrame = activeVideoSegment?.start_frame ?? 0;
@@ -661,10 +685,19 @@ export function AnnotationPage() {
         ? "Save failed"
         : "Ready";
   const sessionLabel = getSessionTitle(session);
-  const originalCsvExportUrl = sessionId ? buildSessionCsvExportUrl(sessionId, "initial") : "";
-  const editedCsvExportUrl = sessionId ? buildSessionCsvExportUrl(sessionId, "current") : "";
+  const originalCsvExportUrl = sessionId
+    ? publicMode
+      ? buildPublicSessionCsvExportUrl(sessionId, "initial", editToken)
+      : buildSessionCsvExportUrl(sessionId, "initial")
+    : "";
+  const editedCsvExportUrl = sessionId
+    ? publicMode
+      ? buildPublicSessionCsvExportUrl(sessionId, "current", editToken)
+      : buildSessionCsvExportUrl(sessionId, "current")
+    : "";
   const undoTimelineAvailable = !!session?.event_undo_available;
   const canUndoTimeline = undoTimelineAvailable
+    && isPublicEditable
     && !undoingTimeline
     && !resettingTimeline
     && !deletingCurrentSession
@@ -693,12 +726,15 @@ export function AnnotationPage() {
   const nextEventIndex = selectedIndex + 1 < events.length ? selectedIndex + 1 : null;
   const nextEventRow = nextEventIndex === null ? null : events[nextEventIndex] ?? null;
   const canAlignWithNextEvent = !!(
-    selectedRow
+    isPublicEditable
+    && selectedRow
     && nextEventRow
     && typeof nextEventRow.synced_frame_id === "number"
     && Number.isFinite(nextEventRow.synced_frame_id)
   );
-  const alignWithNextEventTitle = !selectedRow
+  const alignWithNextEventTitle = isPublicReadOnly
+    ? "This public session is read-only."
+    : !selectedRow
     ? "Select a row first."
     : nextEventIndex === null
       ? "No next event to align with."
@@ -944,25 +980,33 @@ export function AnnotationPage() {
     if (!sessionId) return;
     setLoading(true);
     try {
-      const s = await fetchSession(sessionId);
+      const s = publicMode
+        ? await fetchPublicSession(sessionId, editToken)
+        : await fetchSession(sessionId);
       setSession(s);
       if (s.status === "ready") {
         const [eventData, initialEventData] = await Promise.all([
-          fetchEvents(sessionId),
-          fetchEvents(sessionId, "initial").catch(() => null),
+          publicMode ? fetchPublicEvents(sessionId, "current", editToken) : fetchEvents(sessionId),
+          publicMode
+            ? fetchPublicEvents(sessionId, "initial", editToken).catch(() => null)
+            : fetchEvents(sessionId, "initial").catch(() => null),
         ]);
         const normalized = normalizeMissingRowsByFrame(eventData.events, s.fps ?? 25);
+        const canPersistRecoveredRows = !publicMode || !!s.public_editable;
         setEvents(normalized.rows);
         setInitialEvents(initialEventData?.events?.length ? initialEventData.events : eventData.events);
         applyReviewFeedback(eventData);
         setInitialLoaded(true);
-        setDirty(normalized.changed);
-        if (normalized.changed) {
+        setDirty(canPersistRecoveredRows && normalized.changed);
+        if (normalized.changed && canPersistRecoveredRows) {
           setSaveState("saved");
           setSaveMessage("Recovered missing-row timestamps from frame_id");
+        } else if (publicMode && s.public_read_only) {
+          setSaveState("idle");
+          setSaveMessage("");
         }
         try {
-          const fetchedTypes = await fetchSpadlTypes();
+          const fetchedTypes = publicMode ? await fetchPublicSpadlTypes() : await fetchSpadlTypes();
           const merged = new Set<string>(fetchedTypes);
           for (const row of normalized.rows) {
             if (row.spadl_type) merged.add(row.spadl_type);
@@ -987,7 +1031,7 @@ export function AnnotationPage() {
   useEffect(() => {
     void loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [editToken, publicMode, sessionId]);
 
   useEffect(() => {
     if (!sessionId || !session || session.status !== "processing") {
@@ -995,22 +1039,25 @@ export function AnnotationPage() {
     }
 
     const timer = window.setInterval(async () => {
-      const updated = await fetchSession(sessionId);
+      const updated = publicMode ? await fetchPublicSession(sessionId, editToken) : await fetchSession(sessionId);
       setSession(updated);
       if (updated.status !== "processing") {
         window.clearInterval(timer);
         if (updated.status === "ready") {
           const [eventData, initialEventData] = await Promise.all([
-            fetchEvents(sessionId),
-            fetchEvents(sessionId, "initial").catch(() => null),
+            publicMode ? fetchPublicEvents(sessionId, "current", editToken) : fetchEvents(sessionId),
+            publicMode
+              ? fetchPublicEvents(sessionId, "initial", editToken).catch(() => null)
+              : fetchEvents(sessionId, "initial").catch(() => null),
           ]);
           const normalized = normalizeMissingRowsByFrame(eventData.events, updated.fps ?? 25);
+          const canPersistRecoveredRows = !publicMode || !!updated.public_editable;
           setEvents(normalized.rows);
           setInitialEvents(initialEventData?.events?.length ? initialEventData.events : eventData.events);
           applyReviewFeedback(eventData);
           setInitialLoaded(true);
-          setDirty(normalized.changed);
-          if (normalized.changed) {
+          setDirty(canPersistRecoveredRows && normalized.changed);
+          if (normalized.changed && canPersistRecoveredRows) {
             setSaveState("saved");
             setSaveMessage("Recovered missing-row timestamps from frame_id");
           }
@@ -1019,17 +1066,19 @@ export function AnnotationPage() {
     }, 2000);
 
     return () => window.clearInterval(timer);
-  }, [applyReviewFeedback, session, sessionId]);
+  }, [applyReviewFeedback, editToken, publicMode, session, sessionId]);
 
   useEffect(() => {
-    if (!initialLoaded || !dirty || !sessionId) {
+    if (!initialLoaded || !dirty || !sessionId || isPublicReadOnly) {
       return;
     }
 
     const timer = window.setTimeout(async () => {
       setSaveState("saving");
       try {
-        const result = await saveEvents(sessionId, events);
+        const result = publicMode
+          ? await savePublicEvents(sessionId, events, editToken)
+          : await saveEvents(sessionId, events);
         applyReviewFeedback(result);
         setSession((prev) => (
           prev ? { ...prev, event_undo_available: result.event_undo_available } : prev
@@ -1044,7 +1093,7 @@ export function AnnotationPage() {
     }, 700);
 
     return () => window.clearTimeout(timer);
-  }, [applyReviewFeedback, dirty, events, initialLoaded, sessionId]);
+  }, [applyReviewFeedback, dirty, editToken, events, initialLoaded, isPublicReadOnly, publicMode, sessionId]);
 
   useEffect(() => {
     if (events.length === 0) {
@@ -1075,6 +1124,9 @@ export function AnnotationPage() {
   }, [currentFrame, events, hasPendingRowChanges]);
 
   const alignWithNextEvent = useCallback(() => {
+    if (!isPublicEditable) {
+      return;
+    }
     if (!selectedRow || nextEventIndex === null || !nextEventRow) {
       return;
     }
@@ -1128,6 +1180,7 @@ export function AnnotationPage() {
     draftRow,
     events,
     getEventTimestampForFrame,
+    isPublicEditable,
     knownEntityIdSet,
     nextEventIndex,
     nextEventRow,
@@ -1182,6 +1235,9 @@ export function AnnotationPage() {
   }, [activeVideoFps, alignWithNextEvent, canAlignWithNextEvent, seekBySegmentFrames]);
 
   const updateDraftRow = (patch: Partial<EventRow>) => {
+    if (!isPublicEditable) {
+      return;
+    }
     setDraftRow((prev) => {
       if (!prev) return prev;
       const merged = { ...prev, ...patch };
@@ -1209,6 +1265,7 @@ export function AnnotationPage() {
   };
 
   const confirmRowChanges = () => {
+    if (!isPublicEditable) return;
     if (!selectedRow || !draftRow) return;
 
     if (isSameEventRow(selectedRow, draftRow)) {
@@ -1238,6 +1295,9 @@ export function AnnotationPage() {
   };
 
   const resetSelectedRow = () => {
+    if (!isPublicEditable) {
+      return;
+    }
     if (!selectedRow) {
       return;
     }
@@ -1294,6 +1354,7 @@ export function AnnotationPage() {
   };
 
   const applyCurrentTo = (field: "synced" | "receive") => {
+    if (!isPublicEditable) return;
     if (!draftRow) return;
     const frame = currentFrame;
     const ts = getEventTimestampForFrame(frame, draftRow.period_id);
@@ -1305,6 +1366,7 @@ export function AnnotationPage() {
   };
 
   const updateFrameAndTimestamp = (field: "synced" | "receive", rawValue: string) => {
+    if (!isPublicEditable) return;
     const trimmed = rawValue.trim();
     if (trimmed === "") {
       if (field === "synced") {
@@ -1336,6 +1398,9 @@ export function AnnotationPage() {
   };
 
   const handleAddVideoSegment = async () => {
+    if (!isPublicEditable) {
+      return;
+    }
     if (!sessionId) {
       return;
     }
@@ -1348,10 +1413,16 @@ export function AnnotationPage() {
     setSaveState("saving");
     setSaveMessage("");
     try {
-      const updated = await addSessionVideo({
-        sessionId,
-        videoFile: segmentUploadFile,
-      });
+      const updated = publicMode
+        ? await addPublicSessionVideo({
+          sessionId,
+          videoFile: segmentUploadFile,
+          editToken,
+        })
+        : await addSessionVideo({
+          sessionId,
+          videoFile: segmentUploadFile,
+        });
       setSession(updated);
       let nextIndex = 0;
       for (let index = updated.video_segments.length - 1; index >= 0; index -= 1) {
@@ -1376,6 +1447,9 @@ export function AnnotationPage() {
   };
 
   const handleApplySegmentTiming = async () => {
+    if (!isPublicEditable) {
+      return;
+    }
     if (!sessionId || !activeVideoSegment) {
       return;
     }
@@ -1398,12 +1472,20 @@ export function AnnotationPage() {
     setSaveState("saving");
     setSaveMessage("");
     try {
-      const updated = await updateSessionVideoTiming({
-        sessionId,
-        segmentId: activeVideoSegment.id,
-        periodStartFrame: Math.round(parsedPeriodStartFrame),
-        videoStartTimeSeconds: parsedVideoStartTime,
-      });
+      const updated = publicMode
+        ? await updatePublicSessionVideoTiming({
+          sessionId,
+          segmentId: activeVideoSegment.id,
+          periodStartFrame: Math.round(parsedPeriodStartFrame),
+          videoStartTimeSeconds: parsedVideoStartTime,
+          editToken,
+        })
+        : await updateSessionVideoTiming({
+          sessionId,
+          segmentId: activeVideoSegment.id,
+          periodStartFrame: Math.round(parsedPeriodStartFrame),
+          videoStartTimeSeconds: parsedVideoStartTime,
+        });
       setSession(updated);
       const nextSegments = updated.video_segments?.length ? updated.video_segments : buildLegacyVideoSegments(updated);
       const nextIndex = nextSegments.findIndex((segment) => segment.id === activeVideoSegment.id);
@@ -1421,6 +1503,9 @@ export function AnnotationPage() {
   };
 
   const beginTitleEdit = () => {
+    if (publicMode) {
+      return;
+    }
     if (!session) {
       return;
     }
@@ -1436,6 +1521,9 @@ export function AnnotationPage() {
   };
 
   const saveTitleEdit = async () => {
+    if (publicMode) {
+      return;
+    }
     if (!sessionId || !session) {
       return;
     }
@@ -1455,6 +1543,9 @@ export function AnnotationPage() {
   };
 
   const handleDeleteCurrentSession = async () => {
+    if (publicMode) {
+      return;
+    }
     if (!sessionId || !session) {
       return;
     }
@@ -1571,6 +1662,9 @@ export function AnnotationPage() {
   };
 
   const addMissingRow = () => {
+    if (!isPublicEditable) {
+      return;
+    }
     const basePeriod = selectedRow?.period_id ?? 1;
     const nextRow = selectedIndex >= 0 && selectedIndex + 1 < events.length ? events[selectedIndex + 1] : null;
     const defaultSyncedFrame = currentFrame;
@@ -1609,6 +1703,9 @@ export function AnnotationPage() {
   };
 
   const removeSelectedRow = () => {
+    if (!isPublicEditable) {
+      return;
+    }
     if (!selectedRow) {
       return;
     }
@@ -1627,6 +1724,7 @@ export function AnnotationPage() {
   };
 
   const handleUndoTimeline = async () => {
+    if (!isPublicEditable) return;
     if (!sessionId || !canUndoTimeline) return;
 
     const confirmed = window.confirm(
@@ -1641,14 +1739,18 @@ export function AnnotationPage() {
     setUndoingTimeline(true);
     setSaveState("saving");
     try {
-      const result = await undoEvents(sessionId);
+      const result = publicMode
+        ? await undoPublicEvents(sessionId, editToken)
+        : await undoEvents(sessionId);
       applyReviewFeedback(result);
       setSaveMessage(`Undid last saved edit (${result.restored_count} rows)`);
-      const latest = await fetchSession(sessionId);
+      const latest = publicMode ? await fetchPublicSession(sessionId, editToken) : await fetchSession(sessionId);
       setSession(latest);
       const [eventData, initialEventData] = await Promise.all([
-        fetchEvents(sessionId),
-        fetchEvents(sessionId, "initial").catch(() => null),
+        publicMode ? fetchPublicEvents(sessionId, "current", editToken) : fetchEvents(sessionId),
+        publicMode
+          ? fetchPublicEvents(sessionId, "initial", editToken).catch(() => null)
+          : fetchEvents(sessionId, "initial").catch(() => null),
       ]);
       setEvents(eventData.events);
       setInitialEvents(initialEventData?.events?.length ? initialEventData.events : eventData.events);
@@ -1668,6 +1770,7 @@ export function AnnotationPage() {
   };
 
   const handleResetTimeline = async () => {
+    if (!isPublicEditable) return;
     if (!sessionId) return;
 
     const confirmed = window.confirm(
@@ -1681,7 +1784,9 @@ export function AnnotationPage() {
     setResettingTimeline(true);
     setSaveState("saving");
     try {
-      const result = await resetEvents(sessionId);
+      const result = publicMode
+        ? await resetPublicEvents(sessionId, editToken)
+        : await resetEvents(sessionId);
       applyReviewFeedback(result);
       setSaveState("saved");
       setSaveMessage(
@@ -1689,11 +1794,13 @@ export function AnnotationPage() {
           ? `Restored original CSV (${result.restored_count} rows)`
           : `Restored original events (${result.restored_count} rows)`,
       );
-      const latest = await fetchSession(sessionId);
+      const latest = publicMode ? await fetchPublicSession(sessionId, editToken) : await fetchSession(sessionId);
       setSession(latest);
       const [eventData, initialEventData] = await Promise.all([
-        fetchEvents(sessionId),
-        fetchEvents(sessionId, "initial").catch(() => null),
+        publicMode ? fetchPublicEvents(sessionId, "current", editToken) : fetchEvents(sessionId),
+        publicMode
+          ? fetchPublicEvents(sessionId, "initial", editToken).catch(() => null)
+          : fetchEvents(sessionId, "initial").catch(() => null),
       ]);
       setEvents(eventData.events);
       setInitialEvents(initialEventData?.events?.length ? initialEventData.events : eventData.events);
@@ -1725,7 +1832,7 @@ export function AnnotationPage() {
         <section className="card status-panel">
           <h1>{sessionLabel}</h1>
           <p className="muted">{session.progress ?? "processing"}</p>
-          <Link className="button-link" to="/">Back to Sessions</Link>
+          <Link className="button-link" to={publicMode ? "/" : "/admin"}>Back to Sessions</Link>
         </section>
       </div>
     );
@@ -1737,7 +1844,7 @@ export function AnnotationPage() {
         <section className="card status-panel">
           <h1>{sessionLabel}</h1>
           <pre className="error-box">{session.error_message}</pre>
-          <Link className="button-link" to="/">Back to Sessions</Link>
+          <Link className="button-link" to={publicMode ? "/" : "/admin"}>Back to Sessions</Link>
         </section>
       </div>
     );
@@ -1785,14 +1892,16 @@ export function AnnotationPage() {
           ) : (
             <div className="annot-title-display">
               <h1>{sessionLabel}</h1>
-              <button
-                type="button"
-                className="session-title-edit-button"
-                onClick={beginTitleEdit}
-                disabled={savingTitle || deletingCurrentSession}
-              >
-                Edit Title
-              </button>
+              {!publicMode && (
+                <button
+                  type="button"
+                  className="session-title-edit-button"
+                  onClick={beginTitleEdit}
+                  disabled={savingTitle || deletingCurrentSession}
+                >
+                  Edit Title
+                </button>
+              )}
             </div>
           )}
           <div className="annot-meta">
@@ -1805,7 +1914,14 @@ export function AnnotationPage() {
                 {saveStateLabel}
               </span>
             )}
+            {publicMode && isPublicReadOnly && <span className="meta-pill">Read-only public view</span>}
+            {publicMode && isPublicEditable && <span className="meta-pill">Editable public session</span>}
           </div>
+          {publicMode && isPublicReadOnly && (
+            <p className="annot-session-feedback">
+              This public baseline can be reviewed and downloaded, but edits are only available in the internal admin app.
+            </p>
+          )}
           {sessionActionError ? <p className="annot-session-feedback">{sessionActionError}</p> : null}
         </div>
         <div className="row annot-actions">
@@ -1818,7 +1934,7 @@ export function AnnotationPage() {
             </a>
           </div>
           <div className="annot-action-group annot-action-group-manage">
-            <Link className="button-link" to="/">Back to Sessions</Link>
+            <Link className="button-link" to={publicMode ? "/" : "/admin"}>Back to Sessions</Link>
             <button
               type="button"
               onClick={() => void handleUndoTimeline()}
@@ -1831,20 +1947,22 @@ export function AnnotationPage() {
             <button
               className="danger"
               onClick={() => void handleResetTimeline()}
-              disabled={resettingTimeline || undoingTimeline || deletingCurrentSession}
+              disabled={!isPublicEditable || resettingTimeline || undoingTimeline || deletingCurrentSession}
             >
               {resettingTimeline && <span className="spinner" aria-hidden="true" />}
               {resettingTimeline ? "Resetting..." : "Reset to Original"}
             </button>
-            <button
-              type="button"
-              className="danger"
-              onClick={() => void handleDeleteCurrentSession()}
-              disabled={deletingCurrentSession || undoingTimeline || savingTitle || saveState === "saving"}
-            >
-              {deletingCurrentSession && <span className="spinner" aria-hidden="true" />}
-              {deletingCurrentSession ? "Deleting..." : "Delete Session"}
-            </button>
+            {!publicMode && (
+              <button
+                type="button"
+                className="danger"
+                onClick={() => void handleDeleteCurrentSession()}
+                disabled={deletingCurrentSession || undoingTimeline || savingTitle || saveState === "saving"}
+              >
+                {deletingCurrentSession && <span className="spinner" aria-hidden="true" />}
+                {deletingCurrentSession ? "Deleting..." : "Delete Session"}
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -1975,7 +2093,7 @@ export function AnnotationPage() {
                         value={segmentTimingPeriodStartFrame}
                         onChange={(event) => setSegmentTimingPeriodStartFrame(event.target.value)}
                         placeholder="e.g. 10000"
-                        disabled={savingSegmentTiming}
+                        disabled={!isPublicEditable || savingSegmentTiming}
                       />
                     </label>
                     <label>
@@ -1985,7 +2103,7 @@ export function AnnotationPage() {
                         value={segmentTimingVideoStartTime}
                         onChange={(event) => setSegmentTimingVideoStartTime(event.target.value)}
                         placeholder="e.g. 00:10 or 10"
-                        disabled={savingSegmentTiming}
+                        disabled={!isPublicEditable || savingSegmentTiming}
                       />
                     </label>
                     <div className="video-timing-preview">
@@ -1998,7 +2116,7 @@ export function AnnotationPage() {
                       type="button"
                       className="primary"
                       onClick={() => void handleApplySegmentTiming()}
-                      disabled={savingSegmentTiming || !activeVideoSegment}
+                      disabled={!isPublicEditable || savingSegmentTiming || !activeVideoSegment}
                     >
                       {savingSegmentTiming ? "Applying..." : "Apply Timing"}
                     </button>
@@ -2028,10 +2146,12 @@ export function AnnotationPage() {
             </>
           ) : isUploadSession ? (
             <div className="video-empty-state">
-              <span className="panel-kicker">Video Pending</span>
-              <h3>Add the first video segment</h3>
+              <span className="panel-kicker">{isPublicReadOnly ? "No Video" : "Video Pending"}</span>
+              <h3>{isPublicReadOnly ? "No video available for this public baseline" : "Add the first video segment"}</h3>
               <p className="muted">This session was created from CSV only, so the video panel is still empty.</p>
-              <p className="muted compact-note">Upload a segment below to enable frame scrubbing, timing calibration, and video-assisted review.</p>
+              {!isPublicReadOnly && (
+                <p className="muted compact-note">Upload a segment below to enable frame scrubbing, timing calibration, and video-assisted review.</p>
+              )}
             </div>
           ) : (
             <p className="muted">No video available.</p>
@@ -2058,18 +2178,18 @@ export function AnnotationPage() {
                     </span>
                     <input
                       key={segmentUploadFile?.name ?? "video-segment-empty"}
-                      type="file"
-                      accept=".mp4,.mov,.m4v,.webm,video/*"
-                      onChange={(event) => setSegmentUploadFile(event.target.files?.[0] ?? null)}
-                      disabled={uploadingSegment}
-                    />
+                  type="file"
+                  accept=".mp4,.mov,.m4v,.webm,video/*"
+                  onChange={(event) => setSegmentUploadFile(event.target.files?.[0] ?? null)}
+                  disabled={!isPublicEditable || uploadingSegment}
+                />
                   </span>
                 </label>
                 <button
                   type="button"
                   className="primary"
                   onClick={() => void handleAddVideoSegment()}
-                  disabled={uploadingSegment || !segmentUploadFile}
+                  disabled={!isPublicEditable || uploadingSegment || !segmentUploadFile}
                 >
                   {uploadingSegment ? "Uploading..." : "Upload"}
                 </button>
@@ -2093,8 +2213,8 @@ export function AnnotationPage() {
                 >
                   Align with Next Event
                 </button>
-                <button onClick={addMissingRow}>Add Missing Event</button>
-                <button className="danger" disabled={!selectedRow} onClick={removeSelectedRow}>Delete Row</button>
+                <button onClick={addMissingRow} disabled={!isPublicEditable}>Add Missing Event</button>
+                <button className="danger" disabled={!isPublicEditable || !selectedRow} onClick={removeSelectedRow}>Delete Row</button>
               </div>
             </div>
             <div className="timeline-hud">
@@ -2173,6 +2293,7 @@ export function AnnotationPage() {
                       type="number"
                       value={draftRow?.period_id ?? selectedRow.period_id}
                       onChange={(e) => updateDraftRow({ period_id: Number(e.target.value) || 1 })}
+                      disabled={!isPublicEditable}
                     />
                   </label>
 
@@ -2181,6 +2302,7 @@ export function AnnotationPage() {
                     <select
                       value={draftRow?.spadl_type ?? selectedRow.spadl_type}
                       onChange={(e) => updateDraftRow({ spadl_type: e.target.value })}
+                      disabled={!isPublicEditable}
                     >
                       {spadlTypes.length === 0 && (
                         <option value={selectedRow.spadl_type}>{selectedRow.spadl_type}</option>
@@ -2202,6 +2324,7 @@ export function AnnotationPage() {
                       className={!isDraftPlayerIdValid ? "input-error" : ""}
                       value={draftPlayerId}
                       onChange={(e) => updateDraftRow({ player_id: e.target.value })}
+                      disabled={!isPublicEditable}
                     >
                       {draftPlayerId && !knownEntityIdSet.has(draftPlayerId) && (
                         <option value={draftPlayerId}>{draftPlayerId}</option>
@@ -2224,8 +2347,9 @@ export function AnnotationPage() {
                         type="number"
                         value={draftRow?.synced_frame_id ?? selectedRow.synced_frame_id ?? ""}
                         onChange={(e) => updateFrameAndTimestamp("synced", e.target.value)}
+                        disabled={!isPublicEditable}
                       />
-                      <button type="button" onClick={() => applyCurrentTo("synced")}>Use Current</button>
+                      <button type="button" onClick={() => applyCurrentTo("synced")} disabled={!isPublicEditable}>Use Current</button>
                     </div>
                     <p className="muted id-format-help">synced_ts preview: {draftRow?.synced_ts ?? selectedRow.synced_ts ?? "-"}</p>
                   </label>
@@ -2236,6 +2360,7 @@ export function AnnotationPage() {
                       className={!isDraftReceiverIdValid ? "input-error" : ""}
                       value={draftReceiverId}
                       onChange={(e) => updateDraftRow({ receiver_id: e.target.value })}
+                      disabled={!isPublicEditable}
                     >
                       <option value="">(none)</option>
                       {draftReceiverId && !knownEntityIdSet.has(draftReceiverId) && (
@@ -2259,8 +2384,9 @@ export function AnnotationPage() {
                         type="number"
                         value={draftRow?.receive_frame_id ?? selectedRow.receive_frame_id ?? ""}
                         onChange={(e) => updateFrameAndTimestamp("receive", e.target.value)}
+                        disabled={!isPublicEditable}
                       />
-                      <button type="button" onClick={() => applyCurrentTo("receive")}>Use Current</button>
+                      <button type="button" onClick={() => applyCurrentTo("receive")} disabled={!isPublicEditable}>Use Current</button>
                     </div>
                     <p className="muted id-format-help">receive_ts preview: {draftRow?.receive_ts ?? selectedRow.receive_ts ?? "-"}</p>
                   </label>
@@ -2270,6 +2396,7 @@ export function AnnotationPage() {
                     <select
                       value={(draftRow?.outcome ?? selectedRow.outcome) ? "true" : "false"}
                       onChange={(e) => updateDraftRow({ outcome: e.target.value === "true" })}
+                      disabled={!isPublicEditable}
                     >
                       <option value="true">TRUE</option>
                       <option value="false">FALSE</option>
@@ -2281,6 +2408,7 @@ export function AnnotationPage() {
                     <select
                       value={draftRow ? (draftRow.error_type ?? "") : (selectedRow.error_type ?? "")}
                       onChange={(e) => updateDraftRow({ error_type: (e.target.value || null) as ErrorType | null })}
+                      disabled={!isPublicEditable}
                     >
                       {ERROR_TYPES.map((value) => (
                         <option key={value || "empty"} value={value}>
@@ -2300,6 +2428,7 @@ export function AnnotationPage() {
                     value={draftRow?.note ?? selectedRow.note}
                     onChange={(e) => updateDraftRow({ note: e.target.value })}
                     rows={3}
+                    disabled={!isPublicEditable}
                   />
                 </label>
 

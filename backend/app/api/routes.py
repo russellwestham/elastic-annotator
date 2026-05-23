@@ -30,6 +30,15 @@ from backend.app.schemas.api import (
     VideoSegmentTimingUpdateRequest,
 )
 from backend.app.services.elastic_pipeline import ElasticPipelineService
+from backend.app.services.public_access import (
+    apply_public_edit_state,
+    generate_edit_token,
+    hash_edit_token,
+    is_public_baseline_session,
+    is_public_visible_session,
+    public_display_name,
+    verify_edit_token,
+)
 from backend.app.services.session_store import SessionStore
 from backend.app.services.upload_sessions import UploadSessionService
 
@@ -112,7 +121,63 @@ def _to_status_response(metadata: dict) -> SessionStatusResponse:
         video_segments=metadata.get("video_segments") or [],
         event_undo_available=bool(metadata.get("event_undo_available", False))
         or store.has_event_undo_snapshot(metadata["session_id"]),
+        display_name=metadata.get("display_name")
+        or metadata.get("session_name")
+        or metadata.get("original_video_filename")
+        or metadata.get("match_id")
+        or metadata.get("session_id"),
+        public_read_only=bool(metadata.get("public_read_only", False)),
+        public_baseline=bool(metadata.get("public_baseline", False)),
+        public_editable=bool(metadata.get("public_editable", False)),
+        public_source=metadata.get("public_source"),
+        edit_token=metadata.get("edit_token"),
     )
+
+
+def _to_public_status_response(metadata: dict, edit_token: str | None = None) -> SessionStatusResponse:
+    public_metadata = apply_public_edit_state(metadata, edit_token)
+    if not settings.public_contributions_enabled:
+        public_metadata["public_read_only"] = True
+        public_metadata["public_editable"] = False
+        public_metadata.pop("edit_token", None)
+    elif edit_token and public_metadata.get("public_editable"):
+        public_metadata["edit_token"] = edit_token
+    return _to_status_response(public_metadata)
+
+
+def _is_public_visible_for_current_release(metadata: dict) -> bool:
+    if not settings.public_contributions_enabled:
+        return is_public_baseline_session(metadata)
+    return is_public_visible_session(metadata)
+
+
+def _load_public_metadata(session_id: str, edit_token: str | None = None) -> dict:
+    try:
+        metadata = store.load_metadata(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    metadata = _normalize_session_integrity(metadata)
+    if not _is_public_visible_for_current_release(metadata):
+        raise HTTPException(status_code=404, detail=f"Unknown public session: {session_id}")
+    return apply_public_edit_state(metadata, edit_token)
+
+
+def _require_public_edit(session_id: str, edit_token: str | None) -> dict:
+    if not settings.public_contributions_enabled:
+        raise HTTPException(status_code=423, detail="Public editing is frozen for this release.")
+
+    try:
+        metadata = store.load_metadata(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    metadata = _normalize_session_integrity(metadata)
+    if not _is_public_visible_for_current_release(metadata):
+        raise HTTPException(status_code=404, detail=f"Unknown public session: {session_id}")
+    if is_public_baseline_session(metadata):
+        raise HTTPException(status_code=423, detail="This baseline session is read-only on the public surface.")
+    if not bool(metadata.get("public_created", False)) or not verify_edit_token(metadata, edit_token):
+        raise HTTPException(status_code=403, detail="A valid edit_token is required to edit this public session.")
+    return metadata
 
 
 def _session_has_video_artifact(metadata: dict) -> bool:
@@ -408,6 +473,275 @@ def create_upload_session(
     )
     metadata = _normalize_session_integrity(metadata)
     return _to_status_response(metadata)
+
+
+@router.get("/public/meta/spadl-types", response_model=list[str])
+def list_public_spadl_types() -> list[str]:
+    return SPADL_EXTENDED_TYPES
+
+
+@router.get("/public/sessions", response_model=list[SessionStatusResponse])
+def list_public_sessions(limit: int = Query(default=100, ge=1, le=500)) -> list[SessionStatusResponse]:
+    sessions = store.list_sessions(limit=100_000, status=None, match_id=None, include_ephemeral=True)
+    visible: list[dict] = []
+    for metadata in sessions:
+        normalized = _normalize_session_integrity(metadata)
+        if _is_public_visible_for_current_release(normalized):
+            visible.append(normalized)
+
+    baseline_sessions = [item for item in visible if is_public_baseline_session(item)]
+    created_sessions = [item for item in visible if not is_public_baseline_session(item)]
+    baseline_sessions.sort(key=lambda item: public_display_name(item))
+    created_sessions.sort(key=lambda item: item.get("updated_at") or item.get("created_at") or "", reverse=True)
+    ordered = [*baseline_sessions, *created_sessions]
+    return [_to_public_status_response(metadata) for metadata in ordered[:limit]]
+
+
+@router.post("/public/upload-sessions", response_model=SessionStatusResponse)
+def create_public_upload_session(
+    csv_file: UploadFile = File(...),
+    session_name: str | None = Form(default=None),
+) -> SessionStatusResponse:
+    if not settings.public_contributions_enabled:
+        raise HTTPException(status_code=423, detail="Public session creation is frozen for this release.")
+
+    metadata = upload_sessions.create_upload_session(
+        csv_file=csv_file,
+        persist=True,
+        session_name=session_name,
+    )
+    token = generate_edit_token()
+    metadata = store.update_metadata(
+        metadata["session_id"],
+        public_created=True,
+        edit_token_hash=hash_edit_token(token),
+    )
+    metadata = _normalize_session_integrity(metadata)
+    return _to_public_status_response(metadata, token)
+
+
+@router.get("/public/sessions/{session_id}", response_model=SessionStatusResponse)
+def get_public_session(
+    session_id: str,
+    edit_token: str | None = Query(default=None),
+) -> SessionStatusResponse:
+    metadata = _load_public_metadata(session_id, edit_token)
+    return _to_status_response(metadata)
+
+
+@router.get("/public/sessions/{session_id}/events", response_model=EventListResponse)
+def get_public_events(
+    session_id: str,
+    variant: str = Query(default="current"),
+    edit_token: str | None = Query(default=None),
+) -> EventListResponse:
+    if variant not in {"current", "initial"}:
+        raise HTTPException(status_code=400, detail="variant must be one of: current, initial")
+
+    metadata = _load_public_metadata(session_id, edit_token)
+    metadata = upload_sessions.backfill_upload_csv_missing_sync_anchors(session_id, metadata)
+
+    if variant == "initial":
+        try:
+            events = store.load_initial_events(session_id)
+        except FileNotFoundError:
+            events = store.load_events(session_id)
+        if not events:
+            events = store.load_events(session_id)
+    else:
+        events = store.load_events(session_id)
+
+    warnings, import_notes, qa_flags = _collect_review_feedback(metadata, events)
+    return EventListResponse(
+        session_id=session_id,
+        events=events,
+        validation_warnings=warnings,
+        import_notes=import_notes,
+        qa_flags=qa_flags,
+    )
+
+
+@router.put("/public/sessions/{session_id}/events", response_model=EventSaveResponse)
+def save_public_events(
+    session_id: str,
+    request: EventSaveRequest,
+    edit_token: str | None = Query(default=None),
+) -> EventSaveResponse:
+    metadata = _require_public_edit(session_id, edit_token)
+
+    events = [event.model_dump() for event in request.events]
+    current_events = store.load_events(session_id)
+    undo_available = bool(metadata.get("event_undo_available", False)) or store.has_event_undo_snapshot(session_id)
+    if current_events != events:
+        store.save_event_undo_snapshot(session_id, current_events, source="save")
+        undo_available = True
+
+    warnings, import_notes, qa_flags = _collect_review_feedback(metadata, events)
+    store.save_events(session_id, events)
+    store.update_metadata(
+        session_id,
+        event_count=len(events),
+        progress="autosaved",
+        event_undo_available=undo_available,
+    )
+
+    return EventSaveResponse(
+        ok=True,
+        saved_count=len(events),
+        event_undo_available=undo_available,
+        validation_warnings=warnings,
+        import_notes=import_notes,
+        qa_flags=qa_flags,
+    )
+
+
+@router.post("/public/sessions/{session_id}/reset-events")
+def reset_public_events(
+    session_id: str,
+    edit_token: str | None = Query(default=None),
+) -> dict[str, object]:
+    metadata = _require_public_edit(session_id, edit_token)
+
+    previous_events = store.load_events(session_id)
+    try:
+        events, source = pipeline.reset_events_to_initial(session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if previous_events != events:
+        store.save_event_undo_snapshot(session_id, previous_events, source="reset")
+        store.update_metadata(session_id, event_undo_available=True)
+
+    warnings, import_notes, qa_flags = _collect_review_feedback(metadata, events)
+    return {
+        "ok": True,
+        "restored_count": len(events),
+        "source": source,
+        "event_undo_available": previous_events != events,
+        "undo_source": "reset" if previous_events != events else None,
+        "validation_warnings": warnings,
+        "import_notes": [item.model_dump() for item in import_notes],
+        "qa_flags": [item.model_dump() for item in qa_flags],
+    }
+
+
+@router.post("/public/sessions/{session_id}/undo-events")
+def undo_public_events(
+    session_id: str,
+    edit_token: str | None = Query(default=None),
+) -> dict[str, object]:
+    metadata = _require_public_edit(session_id, edit_token)
+
+    try:
+        snapshot = store.load_event_undo_snapshot(session_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail="No saved edit to undo.") from exc
+
+    events = snapshot.get("events")
+    if not isinstance(events, list):
+        raise HTTPException(status_code=400, detail="Undo snapshot is invalid.")
+
+    store.save_events(session_id, events)
+    store.clear_event_undo_snapshot(session_id)
+    updated_metadata = store.update_metadata(
+        session_id,
+        event_count=len(events),
+        progress="undo_events",
+        event_undo_available=False,
+    )
+
+    warnings, import_notes, qa_flags = _collect_review_feedback(updated_metadata or metadata, events)
+    return {
+        "ok": True,
+        "restored_count": len(events),
+        "source": snapshot.get("source") or "save",
+        "created_at": snapshot.get("created_at"),
+        "event_undo_available": False,
+        "validation_warnings": warnings,
+        "import_notes": [item.model_dump() for item in import_notes],
+        "qa_flags": [item.model_dump() for item in qa_flags],
+    }
+
+
+@router.post("/public/sessions/{session_id}/videos", response_model=SessionStatusResponse)
+def add_public_session_video(
+    session_id: str,
+    video_file: UploadFile = File(...),
+    start_frame: int | None = Form(default=None),
+    edit_token: str | None = Query(default=None),
+) -> SessionStatusResponse:
+    if start_frame is not None and start_frame < 0:
+        raise HTTPException(status_code=400, detail="start_frame must be non-negative")
+
+    metadata = _require_public_edit(session_id, edit_token)
+    if metadata.get("status") == "processing":
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot replace videos while the session is still processing.",
+        )
+
+    updated = upload_sessions.add_video_segment(
+        session_id=session_id,
+        metadata=metadata,
+        video_file=video_file,
+        start_frame=start_frame,
+    )
+    updated = _normalize_session_integrity(updated)
+    return _to_public_status_response(updated, edit_token)
+
+
+@router.patch("/public/sessions/{session_id}/videos/{segment_id}/timing", response_model=SessionStatusResponse)
+def update_public_session_video_timing(
+    session_id: str,
+    segment_id: str,
+    request: VideoSegmentTimingUpdateRequest,
+    edit_token: str | None = Query(default=None),
+) -> SessionStatusResponse:
+    metadata = _require_public_edit(session_id, edit_token)
+    if metadata.get("status") == "processing":
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot update video timing while the session is still processing.",
+        )
+
+    updated = upload_sessions.update_video_segment_timing(
+        session_id=session_id,
+        metadata=metadata,
+        segment_id=segment_id,
+        period_start_frame=request.period_start_frame,
+        video_start_time_seconds=request.video_start_time_seconds,
+    )
+    updated = _normalize_session_integrity(updated)
+    return _to_public_status_response(updated, edit_token)
+
+
+@router.get("/public/sessions/{session_id}/export.csv")
+def export_public_session_csv(
+    session_id: str,
+    variant: str = Query(default="current"),
+    edit_token: str | None = Query(default=None),
+) -> FileResponse:
+    if variant not in {"current", "initial"}:
+        raise HTTPException(status_code=400, detail="variant must be one of: current, initial")
+
+    metadata = _load_public_metadata(session_id, edit_token)
+
+    if variant == "initial":
+        try:
+            events = store.load_initial_events(session_id)
+        except FileNotFoundError:
+            events = store.load_events(session_id)
+    else:
+        events = store.load_events(session_id)
+
+    if not events:
+        events = store.load_events(session_id)
+
+    export_path = upload_sessions.export_events_csv(session_id, events, variant=variant)
+    match_label = str(metadata.get("display_name") or public_display_name(metadata)).strip() or session_id
+    suffix = "original" if variant == "initial" else "edited"
+    filename = f"{match_label}_{suffix}_gt_events.csv"
+    return FileResponse(path=export_path, filename=filename, media_type="text/csv")
 
 
 @router.get("/sessions/{session_id}", response_model=SessionStatusResponse)

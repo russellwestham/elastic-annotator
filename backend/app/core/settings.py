@@ -25,6 +25,9 @@ class Settings(BaseSettings):
 
     sessions_root: Path = PROJECT_ROOT / "backend" / "storage" / "sessions"
     datasets_root: Path = PROJECT_ROOT / "backend" / "storage" / "datasets"
+    public_hosts: str = ""
+    admin_hosts: str = ""
+    public_contributions_enabled: bool = False
 
     @field_validator(
         "elastic_repo_path",

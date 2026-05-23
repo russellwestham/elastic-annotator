@@ -3,10 +3,15 @@ import { Link, useParams } from "react-router-dom";
 
 import { fetchLatestSessionForMatch } from "../api";
 
-export function MatchRedirectPage() {
+interface MatchRedirectPageProps {
+  basePath?: string;
+}
+
+export function MatchRedirectPage({ basePath = "" }: MatchRedirectPageProps) {
   const { matchId = "" } = useParams();
   const [error, setError] = useState<string | null>(null);
   const [hasFallbackSession, setHasFallbackSession] = useState(false);
+  const normalizedBasePath = basePath.replace(/\/$/, "");
 
   useEffect(() => {
     let cancelled = false;
@@ -22,7 +27,7 @@ export function MatchRedirectPage() {
         const latest = await fetchLatestSessionForMatch(normalizedMatchId);
         if (cancelled) return;
         if (latest?.session_id) {
-          window.location.replace(`/annotate/${encodeURIComponent(latest.session_id)}`);
+          window.location.replace(`${normalizedBasePath}/annotate/${encodeURIComponent(latest.session_id)}`);
           return;
         }
         setHasFallbackSession(false);
@@ -41,7 +46,7 @@ export function MatchRedirectPage() {
     return () => {
       cancelled = true;
     };
-  }, [matchId]);
+  }, [matchId, normalizedBasePath]);
 
   if (!error) {
     return (
@@ -62,13 +67,13 @@ export function MatchRedirectPage() {
         {hasFallbackSession && (
           <p>
             Latest session:{" "}
-            <a href={`/annotate/m/${encodeURIComponent(matchId)}`} target="_blank" rel="noreferrer">
-              /annotate/m/{matchId}
+            <a href={`${normalizedBasePath}/annotate/m/${encodeURIComponent(matchId)}`} target="_blank" rel="noreferrer">
+              {normalizedBasePath}/annotate/m/{matchId}
             </a>
           </p>
         )}
         <p>
-          <Link to="/">Go to Session Setup</Link>
+          <Link to={normalizedBasePath || "/"}>Go to Session Setup</Link>
         </p>
       </div>
     </div>

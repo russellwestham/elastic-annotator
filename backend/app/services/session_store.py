@@ -325,6 +325,8 @@ class SessionStore:
             "video_duration_seconds",
             "video_frame_count",
             "event_undo_available",
+            "public_created",
+            "edit_token_hash",
             "validation_warnings",
             "created_at",
             "updated_at",

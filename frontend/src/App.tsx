@@ -45,10 +45,14 @@ function App() {
         {theme === "dark" ? "☀" : "☾"}
       </button>
       <Routes>
-        <Route path="/" element={<SessionCreatePage />} />
-        <Route path="/m/:matchId" element={<MatchRedirectPage />} />
-        <Route path="/annotate/m/:matchId" element={<AnnotationPage />} />
-        <Route path="/annotate/:sessionId" element={<AnnotationPage />} />
+        <Route path="/" element={<SessionCreatePage publicMode />} />
+        <Route path="/public" element={<Navigate to="/" replace />} />
+        <Route path="/annotate/:sessionId" element={<AnnotationPage publicMode />} />
+        <Route path="/public/annotate/:sessionId" element={<AnnotationPage publicMode />} />
+        <Route path="/admin" element={<SessionCreatePage />} />
+        <Route path="/admin/m/:matchId" element={<MatchRedirectPage basePath="/admin" />} />
+        <Route path="/admin/annotate/m/:matchId" element={<AnnotationPage />} />
+        <Route path="/admin/annotate/:sessionId" element={<AnnotationPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>

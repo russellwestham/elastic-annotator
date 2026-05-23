@@ -58,6 +58,12 @@ export interface SessionStatus {
   video_frame_count?: number | null;
   video_segments: VideoSegment[];
   event_undo_available: boolean;
+  display_name?: string | null;
+  public_read_only: boolean;
+  public_baseline: boolean;
+  public_editable: boolean;
+  public_source?: string | null;
+  edit_token?: string | null;
 }
 
 export interface EventRow {

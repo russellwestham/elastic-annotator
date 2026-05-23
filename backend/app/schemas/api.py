@@ -94,6 +94,12 @@ class SessionStatusResponse(BaseModel):
     video_frame_count: int | None = None
     video_segments: list[VideoSegmentResponse] = Field(default_factory=list)
     event_undo_available: bool = False
+    display_name: str | None = None
+    public_read_only: bool = False
+    public_baseline: bool = False
+    public_editable: bool = False
+    public_source: str | None = None
+    edit_token: str | None = None
 
 
 class SessionMetadataUpdateRequest(BaseModel):
