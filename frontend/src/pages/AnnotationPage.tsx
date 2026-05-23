@@ -1914,12 +1914,12 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                 {saveStateLabel}
               </span>
             )}
-            {publicMode && isPublicReadOnly && <span className="meta-pill">Read-only public view</span>}
-            {publicMode && isPublicEditable && <span className="meta-pill">Editable public session</span>}
+            {publicMode && isPublicReadOnly && <span className="meta-pill">Locked</span>}
+            {publicMode && isPublicEditable && <span className="meta-pill">Editable</span>}
           </div>
           {publicMode && isPublicReadOnly && (
             <p className="annot-session-feedback">
-              This public baseline can be reviewed and downloaded, but edits are only available in the internal admin app.
+              This shared session is locked. You can inspect it and download CSV files.
             </p>
           )}
           {sessionActionError ? <p className="annot-session-feedback">{sessionActionError}</p> : null}

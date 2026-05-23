@@ -164,7 +164,7 @@ def _load_public_metadata(session_id: str, edit_token: str | None = None) -> dic
 
 def _require_public_edit(session_id: str, edit_token: str | None) -> dict:
     if not settings.public_contributions_enabled:
-        raise HTTPException(status_code=423, detail="Public editing is frozen for this release.")
+        raise HTTPException(status_code=423, detail="Public editing is currently disabled.")
 
     try:
         metadata = store.load_metadata(session_id)
@@ -503,7 +503,7 @@ def create_public_upload_session(
     session_name: str | None = Form(default=None),
 ) -> SessionStatusResponse:
     if not settings.public_contributions_enabled:
-        raise HTTPException(status_code=423, detail="Public session creation is frozen for this release.")
+        raise HTTPException(status_code=423, detail="Public session creation is currently disabled.")
 
     metadata = upload_sessions.create_upload_session(
         csv_file=csv_file,

@@ -378,10 +378,9 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
       <section className="card create-toolbar">
         {publicMode ? (
           <div className="public-page-heading">
-            <span className="panel-kicker">Frozen Public Review</span>
-            <h1>GT Annotation Review</h1>
+            <h1>ELASTIC Annotator</h1>
             <p className="muted panel-copy">
-              Review anonymized labeling sessions and download the frozen CSV results submitted with the paper.
+              Open annotation sessions, download CSV files, or start a new session from your own CSV.
             </p>
           </div>
         ) : (
@@ -413,11 +412,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
           </div>
         )}
 
-        {publicMode ? (
-          <p className="muted compact-note">
-            Public editing is disabled for this frozen release. Internal annotators can continue work from the protected admin app.
-          </p>
-        ) : createMode === "existing" ? (
+        {!publicMode && createMode === "existing" ? (
           <div
             id="session-mode-panel-existing"
             role="tabpanel"
@@ -464,9 +459,9 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
           </div>
         ) : (
           <div
-            id="session-mode-panel-upload"
-            role="tabpanel"
-            aria-labelledby="session-mode-tab-upload"
+            id={publicMode ? "public-upload-panel" : "session-mode-panel-upload"}
+            role={publicMode ? undefined : "tabpanel"}
+            aria-labelledby={publicMode ? undefined : "session-mode-tab-upload"}
             className="create-panel"
           >
             <div className="create-fields upload-grid upload-grid-single">
@@ -502,12 +497,14 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
               </label>
             </div>
             <p className="muted compact-note">
-              Create the session with CSV first. You can upload the video later inside the editor.
+              {publicMode
+                ? "New sessions open with a private edit link. Keep that URL if you want to continue editing later."
+                : "Create the session with CSV first. You can upload the video later inside the editor."}
             </p>
 
             <div className="create-actions upload-actions">
               <button type="button" className="primary" onClick={handleCreateUpload} disabled={creating}>
-                {creating ? "Uploading..." : "Open in Editor"}
+                {creating ? "Uploading..." : publicMode ? "Create Session" : "Open in Editor"}
               </button>
               {!publicMode && (
                 <label className="check-row compact-check">
@@ -527,10 +524,10 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
       <section className="card recent-panel">
         <div className="section-header recent-session-header">
           <div>
-            <h2>{publicMode ? "Public Sessions" : "Recent Sessions"}</h2>
+            <h2>{publicMode ? "Annotation Sessions" : "Recent Sessions"}</h2>
             <p className="muted panel-copy">
               {publicMode
-                ? "Anonymized GT annotation sessions are read-only for reviewer inspection."
+                ? "Shared sessions are locked. Sessions created from a new CSV are editable from their private link."
                 : "Jump back into recent work without rebuilding the same setup."}
             </p>
           </div>
