@@ -43,7 +43,7 @@ function App() {
         aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
         title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
       >
-        {theme === "dark" ? "☀" : "☾"}
+        {theme === "dark" ? "Light" : "Dark"}
       </button>
       <Routes>
         <Route path="/" element={<SessionCreatePage publicMode />} />

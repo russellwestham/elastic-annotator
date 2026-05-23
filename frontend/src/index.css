@@ -301,15 +301,17 @@ a.button-link {
   right: 1rem;
   bottom: 1rem;
   z-index: 100;
-  width: 2.75rem;
-  height: 2.75rem;
-  padding: 0;
+  width: auto;
+  min-width: 4.4rem;
+  height: 2.55rem;
+  padding: 0 0.82rem;
   border-radius: 999px;
   border-color: var(--line-strong);
   background: var(--surface);
   color: var(--text);
   box-shadow: var(--shadow-md);
-  font-size: 1.1rem;
+  font-size: 0.78rem;
+  font-weight: 760;
 }
 
 .theme-toggle:hover:not(:disabled) {
@@ -1669,12 +1671,6 @@ a.button-link.primary .spinner {
   max-width: 24rem;
 }
 
-.overlay-icon {
-  display: block;
-  font-size: 3rem;
-  margin-bottom: 1rem;
-}
-
 .overlay-content h3 {
   color: #fff;
   font-size: 1.5rem;
@@ -1723,20 +1719,6 @@ a.button-link.primary .spinner {
 .video-empty-state h3,
 .video-empty-state p {
   margin: 0;
-}
-
-.video-empty-arrow {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  margin-top: 0.25rem;
-  border-radius: 999px;
-  background: #0f766e;
-  color: #fff;
-  font-size: 1.2rem;
-  font-weight: 800;
 }
 
 .video-timing-panel {
@@ -2108,6 +2090,36 @@ a.button-link.primary .spinner {
   gap: 0.7rem;
   flex-wrap: wrap;
   margin: 0.3rem 0 0.8rem;
+}
+
+.event-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 0.62rem;
+}
+
+.event-detail-item {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+  padding: 0.62rem 0.68rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-subtle);
+}
+
+.event-detail-label {
+  color: var(--text-secondary);
+  font-size: 0.73rem;
+  font-weight: 700;
+}
+
+.event-detail-value {
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .inspector-footnote {
@@ -2509,11 +2521,6 @@ a.button-link.primary .spinner {
 :root[data-theme="dark"] .section-header .panel-kicker,
 :root[data-theme="dark"] .eyebrow {
   color: var(--accent-strong);
-}
-
-:root[data-theme="dark"] .video-empty-arrow {
-  background: #14b8a6;
-  color: #06211f;
 }
 
 :root[data-theme="dark"] .video-uploader-panel.is-primary-video-step {

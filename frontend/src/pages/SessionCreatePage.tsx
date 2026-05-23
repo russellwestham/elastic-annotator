@@ -81,7 +81,7 @@ function getSessionTitle(session: SessionStatus): string {
 
 function getPublicSessionAccessLabel(session: SessionStatus): string | null {
   if (session.public_baseline) {
-    return "Read-only Sportec";
+    return "Read-only";
   }
   if (session.public_editable) {
     return "Editable";
@@ -94,13 +94,13 @@ function getPublicSessionAccessLabel(session: SessionStatus): string | null {
 
 function getPublicSessionSupportingText(session: SessionStatus): string | null {
   if (session.public_baseline) {
-    return "Inspection and CSV download only";
+    return "CSV files available for download";
   }
   if (session.public_editable) {
-    return "Editable with this edit link";
+    return "Editable with edit link";
   }
   if (session.public_source === "created") {
-    return "Open with the edit link to edit";
+    return "Open with edit link to edit";
   }
   return null;
 }
@@ -162,7 +162,7 @@ function SessionListPanel({
           <h2>{publicMode ? "Annotation Sessions" : "Recent Sessions"}</h2>
           <p className="muted panel-copy">
             {publicMode
-              ? "Shared Sportec match sessions are read-only and available for CSV download. New CSV sessions appear here and stay editable with their edit links."
+              ? "Shared Sportec sessions are read-only and available for CSV download. Created sessions appear here and can be edited only from their edit links."
               : "Jump back into recent work without rebuilding the same setup."}
           </p>
         </div>
@@ -246,7 +246,7 @@ function SessionListPanel({
                   </div>
 
                   <div className="recent-session-supporting">
-                    <span>Session ID {session.session_id}</span>
+                    {!publicMode && <span>Session ID {session.session_id}</span>}
                     {publicSupportingText && <span>{publicSupportingText}</span>}
                   </div>
                 </div>

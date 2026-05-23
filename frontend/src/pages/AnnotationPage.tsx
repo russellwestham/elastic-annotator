@@ -87,6 +87,16 @@ function formatSeconds(seconds: number): string {
   return `${String(minutes).padStart(2, "0")}:${remain.toFixed(2).padStart(5, "0")}`;
 }
 
+function formatEventDetailValue(value: string | number | boolean | null | undefined): string {
+  if (typeof value === "boolean") {
+    return value ? "TRUE" : "FALSE";
+  }
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  return String(value);
+}
+
 function getSegmentFrameFromTime(seconds: number, fps: number): number {
   if (!Number.isFinite(seconds) || seconds <= 0) {
     return 0;
@@ -520,6 +530,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
   const isUploadSession = session?.session_mode === "upload_csv";
   const isPublicReadOnly = publicMode && !!session?.public_read_only;
   const isPublicEditable = !publicMode || !!session?.public_editable;
+  const isReadOnlyReview = publicMode && !isPublicEditable;
   const hasPendingRowChanges = !!(selectedRow && draftRow && !isSameEventRow(selectedRow, draftRow));
   const selectedAnchorFrame = getAnchorFrame(selectedRow);
   const draftPlayerId = draftRow?.player_id ?? selectedRow?.player_id ?? "";
@@ -1908,7 +1919,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
           )}
           <div className="annot-meta">
             <span className="meta-pill">{events.length} events</span>
-            <span className="meta-pill">{isUploadSession ? "Uploaded CSV" : "Public Dataset"}</span>
+            {!publicMode && <span className="meta-pill">{isUploadSession ? "Uploaded CSV" : "Public Dataset"}</span>}
             {isUploadSession && !session.persist && <span className="meta-pill">Temporary</span>}
             {saveState !== "idle" && (
               <span className={`status-chip ${saveState}`} aria-live="polite">
@@ -1921,7 +1932,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
           </div>
           {publicMode && isPublicReadOnly && (
             <p className="annot-session-feedback">
-              This shared session is read-only. You can inspect it and download CSV files.
+              This shared session is read-only. You can view events and download CSV files.
             </p>
           )}
           {sessionActionError ? <p className="annot-session-feedback">{sessionActionError}</p> : null}
@@ -1937,23 +1948,27 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
           </div>
           <div className="annot-action-group annot-action-group-manage">
             <Link className="button-link" to={publicMode ? "/" : ADMIN_BASE_PATH}>Back to Sessions</Link>
-            <button
-              type="button"
-              onClick={() => void handleUndoTimeline()}
-              disabled={!canUndoTimeline}
-              title={undoTimelineTitle}
-            >
-              {undoingTimeline && <span className="spinner" aria-hidden="true" />}
-              {undoingTimeline ? "Undoing..." : "Undo Last Edit"}
-            </button>
-            <button
-              className="danger"
-              onClick={() => void handleResetTimeline()}
-              disabled={!isPublicEditable || resettingTimeline || undoingTimeline || deletingCurrentSession}
-            >
-              {resettingTimeline && <span className="spinner" aria-hidden="true" />}
-              {resettingTimeline ? "Resetting..." : "Reset to Original"}
-            </button>
+            {isPublicEditable && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void handleUndoTimeline()}
+                  disabled={!canUndoTimeline}
+                  title={undoTimelineTitle}
+                >
+                  {undoingTimeline && <span className="spinner" aria-hidden="true" />}
+                  {undoingTimeline ? "Undoing..." : "Undo Last Edit"}
+                </button>
+                <button
+                  className="danger"
+                  onClick={() => void handleResetTimeline()}
+                  disabled={resettingTimeline || undoingTimeline || deletingCurrentSession}
+                >
+                  {resettingTimeline && <span className="spinner" aria-hidden="true" />}
+                  {resettingTimeline ? "Resetting..." : "Reset to Original"}
+                </button>
+              </>
+            )}
             {!publicMode && (
               <button
                 type="button"
@@ -1977,17 +1992,17 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
               <h2>Video</h2>
               {!selectedRowHasVideoCoverage && selectedAnchorFrame !== null && (
                 <span className="coverage-badge" title="The selected event frame is not covered by any uploaded video.">
-                  ⚠️ No video coverage for frame {selectedAnchorFrame}
+                  No video coverage for frame {selectedAnchorFrame}
                 </span>
               )}
-              {activeVideoSegment && !activeVideoHasTiming && (
+              {isPublicEditable && activeVideoSegment && !activeVideoHasTiming && (
                 <button
                   type="button"
                   className="calibration-badge pulsate"
                   onClick={scrollToCalibration}
                   title="Click to set video timing."
                 >
-                  ⚠️ Video Timing Required
+                  Video Timing Required
                 </button>
               )}
             </div>
@@ -2059,10 +2074,9 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                     syncDisplayedSegmentFrame(videoEl);
                   }}
                 />
-                {activeVideoSegment && !activeVideoHasTiming && (
+                {isPublicEditable && activeVideoSegment && !activeVideoHasTiming && (
                   <div className="video-block-overlay" onClick={scrollToCalibration}>
                     <div className="overlay-content">
-                      <span className="overlay-icon">⏱️</span>
                       <h3>Video Timing Required</h3>
                       <p>Set video timing below to sync this video with events.</p>
                       <button type="button" className="secondary">Set Video Timing</button>
@@ -2070,7 +2084,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                   </div>
                 )}
               </div>
-              {activeVideoSegment && !activeVideoHasTiming && (
+              {isPublicEditable && activeVideoSegment && !activeVideoHasTiming && (
                 <div className="video-timing-panel" ref={timingCalibrationRef}>
                   <div className="video-timing-heading">
                     <div>
@@ -2149,15 +2163,12 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
           ) : isUploadSession ? (
             <div className="video-empty-state">
               <span className="panel-kicker">{isPublicReadOnly ? "No Video" : "Video Required"}</span>
-              <h3>{isPublicReadOnly ? "No video available for this public baseline" : "Upload a video to start reviewing"}</h3>
+              <h3>{isPublicReadOnly ? "No video available for this session" : "Upload a video to start reviewing"}</h3>
               <p className="muted">
                 {isPublicReadOnly
                   ? "This shared session does not include a video."
                   : "Choose a video file below to enable playback and frame-level review."}
               </p>
-              {!isPublicReadOnly && (
-                <span className="video-empty-arrow" aria-hidden="true">↓</span>
-              )}
             </div>
           ) : (
             <p className="muted">No video available.</p>
@@ -2197,7 +2208,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                 <label className={`video-segment-upload${uploadingSegment ? " is-disabled" : ""}`}>
                   <span className="video-segment-upload-control">
                     <span className={`video-segment-upload-button${segmentUploadFile ? " has-file" : ""}`}>
-                      {segmentUploadFile ? `📄 ${segmentUploadFile.name}` : "Choose Video File"}
+                      {segmentUploadFile ? segmentUploadFile.name : "Choose Video File"}
                     </span>
                     <input
                       key={segmentUploadFile?.name ?? "video-segment-empty"}
@@ -2226,19 +2237,21 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
           <section className="timeline-panel card workspace-card">
             <div className="section-header">
               <h2>Timeline</h2>
-              <div className="section-actions">
-                <button
-                  type="button"
-                  className="primary"
-                  onClick={alignWithNextEvent}
-                  disabled={!canAlignWithNextEvent}
-                  title={alignWithNextEventTitle}
-                >
-                  Align with Next Event
-                </button>
-                <button onClick={addMissingRow} disabled={!isPublicEditable}>Add Missing Event</button>
-                <button className="danger" disabled={!isPublicEditable || !selectedRow} onClick={removeSelectedRow}>Delete Event</button>
-              </div>
+              {isPublicEditable && (
+                <div className="section-actions">
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={alignWithNextEvent}
+                    disabled={!canAlignWithNextEvent}
+                    title={alignWithNextEventTitle}
+                  >
+                    Align with Next Event
+                  </button>
+                  <button onClick={addMissingRow}>Add Missing Event</button>
+                  <button className="danger" disabled={!selectedRow} onClick={removeSelectedRow}>Delete Event</button>
+                </div>
+              )}
             </div>
             <div className="timeline-hud">
               <div className="timeline-hud-item">
@@ -2278,7 +2291,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
           <section className="inspector-panel card workspace-card">
             <div className="section-header">
               <h2>{selectedRow ? `Event #${selectedIndex + 1}` : "Inspector"}</h2>
-              {selectedRow && (
+              {selectedRow && isPublicEditable && (
                 <div className="section-actions">
                   <button
                     type="button"
@@ -2301,166 +2314,194 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
             </div>
 
             {selectedRow ? (
-              <>
-                <div className="inspector-status">
-                  <span className="muted">{hasPendingRowChanges ? "Unsaved changes" : "No changes yet."}</span>
-                  {!canConfirmRowChanges && hasPendingRowChanges && (
-                    <span className="muted">{confirmBlockedReason}</span>
-                  )}
-                </div>
+              isReadOnlyReview ? (
+                <>
+                  <div className="inspector-status">
+                    <span className="muted">Read-only event details</span>
+                  </div>
+                  <div className="event-detail-grid">
+                    {[
+                      { label: "Period", value: selectedRow.period_id },
+                      { label: "Event type", value: selectedRow.spadl_type },
+                      { label: "Player", value: selectedRow.player_id },
+                      { label: "Synced frame", value: selectedRow.synced_frame_id },
+                      { label: "Synced time", value: selectedRow.synced_ts },
+                      { label: "Receiver", value: selectedRow.receiver_id },
+                      { label: "Receive frame", value: selectedRow.receive_frame_id },
+                      { label: "Receive time", value: selectedRow.receive_ts },
+                      { label: "Outcome", value: selectedRow.outcome },
+                      { label: "Error label", value: selectedRow.error_type },
+                      { label: "Note", value: selectedRow.note },
+                    ].map(({ label, value }) => (
+                      <div key={label} className="event-detail-item">
+                        <span className="event-detail-label">{label}</span>
+                        <span className="event-detail-value">{formatEventDetailValue(value)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="inspector-status">
+                    <span className="muted">{hasPendingRowChanges ? "Unsaved changes" : "No changes yet."}</span>
+                    {!canConfirmRowChanges && hasPendingRowChanges && (
+                      <span className="muted">{confirmBlockedReason}</span>
+                    )}
+                  </div>
 
-                <div className="form-grid">
+                  <div className="form-grid">
+                    <label>
+                      period_id
+                      <input
+                        type="number"
+                        value={draftRow?.period_id ?? selectedRow.period_id}
+                        onChange={(e) => updateDraftRow({ period_id: Number(e.target.value) || 1 })}
+                        disabled={!isPublicEditable}
+                      />
+                    </label>
+
+                    <label>
+                      spadl_type
+                      <select
+                        value={draftRow?.spadl_type ?? selectedRow.spadl_type}
+                        onChange={(e) => updateDraftRow({ spadl_type: e.target.value })}
+                        disabled={!isPublicEditable}
+                      >
+                        {spadlTypes.length === 0 && (
+                          <option value={selectedRow.spadl_type}>{selectedRow.spadl_type}</option>
+                        )}
+                        {spadlTypes.map((value) => (
+                          <option key={value} value={value}>
+                            {value}
+                          </option>
+                        ))}
+                        {!spadlTypes.includes(selectedRow.spadl_type) && selectedRow.spadl_type && (
+                          <option value={selectedRow.spadl_type}>{selectedRow.spadl_type}</option>
+                        )}
+                      </select>
+                    </label>
+
+                    <label>
+                      player_id
+                      <select
+                        className={!isDraftPlayerIdValid ? "input-error" : ""}
+                        value={draftPlayerId}
+                        onChange={(e) => updateDraftRow({ player_id: e.target.value })}
+                        disabled={!isPublicEditable}
+                      >
+                        {draftPlayerId && !knownEntityIdSet.has(draftPlayerId) && (
+                          <option value={draftPlayerId}>{draftPlayerId}</option>
+                        )}
+                        {knownEntityIds.map((value) => (
+                          <option key={value} value={value}>
+                            {value}
+                          </option>
+                        ))}
+                      </select>
+                      {!isDraftPlayerIdValid && (
+                        <p className="error-text id-format-help">Select a valid player_id.</p>
+                      )}
+                    </label>
+
+                    <label>
+                      synced_frame_id
+                      <div className="inline-field">
+                        <input
+                          type="number"
+                          value={draftRow?.synced_frame_id ?? selectedRow.synced_frame_id ?? ""}
+                          onChange={(e) => updateFrameAndTimestamp("synced", e.target.value)}
+                          disabled={!isPublicEditable}
+                        />
+                        <button type="button" onClick={() => applyCurrentTo("synced")} disabled={!isPublicEditable}>Use Current</button>
+                      </div>
+                      <p className="muted id-format-help">synced_ts preview: {draftRow?.synced_ts ?? selectedRow.synced_ts ?? "-"}</p>
+                    </label>
+
+                    <label>
+                      receiver_id
+                      <select
+                        className={!isDraftReceiverIdValid ? "input-error" : ""}
+                        value={draftReceiverId}
+                        onChange={(e) => updateDraftRow({ receiver_id: e.target.value })}
+                        disabled={!isPublicEditable}
+                      >
+                        <option value="">(none)</option>
+                        {draftReceiverId && !knownEntityIdSet.has(draftReceiverId) && (
+                          <option value={draftReceiverId}>{draftReceiverId}</option>
+                        )}
+                        {knownEntityIds.map((value) => (
+                          <option key={value} value={value}>
+                            {value}
+                          </option>
+                        ))}
+                      </select>
+                      {!isDraftReceiverIdValid && (
+                        <p className="error-text id-format-help">Select a valid receiver_id or leave it blank.</p>
+                      )}
+                    </label>
+
+                    <label>
+                      receive_frame_id
+                      <div className="inline-field">
+                        <input
+                          type="number"
+                          value={draftRow?.receive_frame_id ?? selectedRow.receive_frame_id ?? ""}
+                          onChange={(e) => updateFrameAndTimestamp("receive", e.target.value)}
+                          disabled={!isPublicEditable}
+                        />
+                        <button type="button" onClick={() => applyCurrentTo("receive")} disabled={!isPublicEditable}>Use Current</button>
+                      </div>
+                      <p className="muted id-format-help">receive_ts preview: {draftRow?.receive_ts ?? selectedRow.receive_ts ?? "-"}</p>
+                    </label>
+
+                    <label>
+                      outcome
+                      <select
+                        value={(draftRow?.outcome ?? selectedRow.outcome) ? "true" : "false"}
+                        onChange={(e) => updateDraftRow({ outcome: e.target.value === "true" })}
+                        disabled={!isPublicEditable}
+                      >
+                        <option value="true">TRUE</option>
+                        <option value="false">FALSE</option>
+                      </select>
+                    </label>
+
+                    <label>
+                      error_type
+                      <select
+                        value={draftRow ? (draftRow.error_type ?? "") : (selectedRow.error_type ?? "")}
+                        onChange={(e) => updateDraftRow({ error_type: (e.target.value || null) as ErrorType | null })}
+                        disabled={!isPublicEditable}
+                      >
+                        {ERROR_TYPES.map((value) => (
+                          <option key={value || "empty"} value={value}>
+                            {value || "(none)"}
+                          </option>
+                        ))}
+                      </select>
+                      {hasPendingRowChanges && (
+                        <p className="muted id-format-help">Auto-picked from the changed field. You can keep (none) when no error label is needed.</p>
+                      )}
+                    </label>
+                  </div>
+
                   <label>
-                    period_id
-                    <input
-                      type="number"
-                      value={draftRow?.period_id ?? selectedRow.period_id}
-                      onChange={(e) => updateDraftRow({ period_id: Number(e.target.value) || 1 })}
+                    note
+                    <textarea
+                      value={draftRow?.note ?? selectedRow.note}
+                      onChange={(e) => updateDraftRow({ note: e.target.value })}
+                      rows={3}
                       disabled={!isPublicEditable}
                     />
                   </label>
 
-                  <label>
-                    spadl_type
-                    <select
-                      value={draftRow?.spadl_type ?? selectedRow.spadl_type}
-                      onChange={(e) => updateDraftRow({ spadl_type: e.target.value })}
-                      disabled={!isPublicEditable}
-                    >
-                      {spadlTypes.length === 0 && (
-                        <option value={selectedRow.spadl_type}>{selectedRow.spadl_type}</option>
-                      )}
-                      {spadlTypes.map((value) => (
-                        <option key={value} value={value}>
-                          {value}
-                        </option>
-                      ))}
-                      {!spadlTypes.includes(selectedRow.spadl_type) && selectedRow.spadl_type && (
-                        <option value={selectedRow.spadl_type}>{selectedRow.spadl_type}</option>
-                      )}
-                    </select>
-                  </label>
-
-                  <label>
-                    player_id
-                    <select
-                      className={!isDraftPlayerIdValid ? "input-error" : ""}
-                      value={draftPlayerId}
-                      onChange={(e) => updateDraftRow({ player_id: e.target.value })}
-                      disabled={!isPublicEditable}
-                    >
-                      {draftPlayerId && !knownEntityIdSet.has(draftPlayerId) && (
-                        <option value={draftPlayerId}>{draftPlayerId}</option>
-                      )}
-                      {knownEntityIds.map((value) => (
-                        <option key={value} value={value}>
-                          {value}
-                        </option>
-                      ))}
-                    </select>
-                    {!isDraftPlayerIdValid && (
-                      <p className="error-text id-format-help">Select a valid player_id.</p>
-                    )}
-                  </label>
-
-                  <label>
-                    synced_frame_id
-                    <div className="inline-field">
-                      <input
-                        type="number"
-                        value={draftRow?.synced_frame_id ?? selectedRow.synced_frame_id ?? ""}
-                        onChange={(e) => updateFrameAndTimestamp("synced", e.target.value)}
-                        disabled={!isPublicEditable}
-                      />
-                      <button type="button" onClick={() => applyCurrentTo("synced")} disabled={!isPublicEditable}>Use Current</button>
-                    </div>
-                    <p className="muted id-format-help">synced_ts preview: {draftRow?.synced_ts ?? selectedRow.synced_ts ?? "-"}</p>
-                  </label>
-
-                  <label>
-                    receiver_id
-                    <select
-                      className={!isDraftReceiverIdValid ? "input-error" : ""}
-                      value={draftReceiverId}
-                      onChange={(e) => updateDraftRow({ receiver_id: e.target.value })}
-                      disabled={!isPublicEditable}
-                    >
-                      <option value="">(none)</option>
-                      {draftReceiverId && !knownEntityIdSet.has(draftReceiverId) && (
-                        <option value={draftReceiverId}>{draftReceiverId}</option>
-                      )}
-                      {knownEntityIds.map((value) => (
-                        <option key={value} value={value}>
-                          {value}
-                        </option>
-                      ))}
-                    </select>
-                    {!isDraftReceiverIdValid && (
-                      <p className="error-text id-format-help">Select a valid receiver_id or leave it blank.</p>
-                    )}
-                  </label>
-
-                  <label>
-                    receive_frame_id
-                    <div className="inline-field">
-                      <input
-                        type="number"
-                        value={draftRow?.receive_frame_id ?? selectedRow.receive_frame_id ?? ""}
-                        onChange={(e) => updateFrameAndTimestamp("receive", e.target.value)}
-                        disabled={!isPublicEditable}
-                      />
-                      <button type="button" onClick={() => applyCurrentTo("receive")} disabled={!isPublicEditable}>Use Current</button>
-                    </div>
-                    <p className="muted id-format-help">receive_ts preview: {draftRow?.receive_ts ?? selectedRow.receive_ts ?? "-"}</p>
-                  </label>
-
-                  <label>
-                    outcome
-                    <select
-                      value={(draftRow?.outcome ?? selectedRow.outcome) ? "true" : "false"}
-                      onChange={(e) => updateDraftRow({ outcome: e.target.value === "true" })}
-                      disabled={!isPublicEditable}
-                    >
-                      <option value="true">TRUE</option>
-                      <option value="false">FALSE</option>
-                    </select>
-                  </label>
-
-                  <label>
-                    error_type
-                    <select
-                      value={draftRow ? (draftRow.error_type ?? "") : (selectedRow.error_type ?? "")}
-                      onChange={(e) => updateDraftRow({ error_type: (e.target.value || null) as ErrorType | null })}
-                      disabled={!isPublicEditable}
-                    >
-                      {ERROR_TYPES.map((value) => (
-                        <option key={value || "empty"} value={value}>
-                          {value || "(none)"}
-                        </option>
-                      ))}
-                    </select>
-                    {hasPendingRowChanges && (
-                      <p className="muted id-format-help">Auto-picked from the changed field. You can keep (none) when no error label is needed.</p>
-                    )}
-                  </label>
-                </div>
-
-                <label>
-                  note
-                  <textarea
-                    value={draftRow?.note ?? selectedRow.note}
-                    onChange={(e) => updateDraftRow({ note: e.target.value })}
-                    rows={3}
-                    disabled={!isPublicEditable}
-                  />
-                </label>
-
-                <p className="muted inspector-footnote">
-                  synced_frame_id: {draftRow?.synced_frame_id ?? selectedRow.synced_frame_id ?? "-"} | receive_frame_id: {draftRow?.receive_frame_id ?? selectedRow.receive_frame_id ?? "-"}
-                </p>
-              </>
+                  <p className="muted inspector-footnote">
+                    synced_frame_id: {draftRow?.synced_frame_id ?? selectedRow.synced_frame_id ?? "-"} | receive_frame_id: {draftRow?.receive_frame_id ?? selectedRow.receive_frame_id ?? "-"}
+                  </p>
+                </>
+              )
             ) : (
-              <p className="muted">Select an event to edit.</p>
+              <p className="muted">{isReadOnlyReview ? "Select an event to view details." : "Select an event to edit."}</p>
             )}
           </section>
 
