@@ -542,6 +542,22 @@ a.button-link.primary .spinner {
   gap: 0.8rem;
 }
 
+.upload-session-fields {
+  max-width: 34rem;
+}
+
+.session-name-field input {
+  font-weight: 650;
+}
+
+.field-hint {
+  display: block;
+  margin-top: 0.34rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
 .two-up {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }

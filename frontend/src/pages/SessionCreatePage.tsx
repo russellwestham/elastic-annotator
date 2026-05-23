@@ -328,6 +328,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
   const [matchId, setMatchId] = useState("");
 
   const [uploadCsvFile, setUploadCsvFile] = useState<File | null>(null);
+  const [uploadSessionName, setUploadSessionName] = useState("");
   const [persistUpload, setPersistUpload] = useState(true);
   const [dragTarget, setDragTarget] = useState<"csv" | null>(null);
 
@@ -477,15 +478,21 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
       setError("Select a CSV file first.");
       return;
     }
+    const normalizedSessionName = uploadSessionName.trim();
+    if (!normalizedSessionName) {
+      setError("Enter a session name.");
+      return;
+    }
 
     setCreating(true);
     setError(null);
     try {
       const created = publicMode
-        ? await createPublicUploadSession({ csvFile: uploadCsvFile })
+        ? await createPublicUploadSession({ csvFile: uploadCsvFile, sessionName: normalizedSessionName })
         : await createUploadSession({
           csvFile: uploadCsvFile,
           persist: persistUpload,
+          sessionName: normalizedSessionName,
         });
       setStatus(created);
       void loadRecentSessions();
@@ -622,6 +629,14 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
     }
   };
 
+  const uploadSessionNameMissing = !uploadSessionName.trim();
+  const uploadCreateDisabled = creating || !uploadCsvFile || uploadSessionNameMissing;
+  const uploadCreateDisabledTitle = !uploadCsvFile
+    ? "Select a CSV file first."
+    : uploadSessionNameMissing
+      ? "Enter a session name."
+      : undefined;
+
   return (
     <div className="page page-create">
       <section className="card create-toolbar">
@@ -713,6 +728,19 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
             aria-labelledby={publicMode ? undefined : "session-mode-tab-upload"}
             className="create-panel"
           >
+            <div className="create-fields upload-session-fields">
+              <label className="session-name-field">
+                Session name
+                <input
+                  value={uploadSessionName}
+                  onChange={(event) => setUploadSessionName(event.target.value)}
+                  placeholder="e.g. J03WN1_your_name"
+                  autoComplete="off"
+                  maxLength={80}
+                />
+                <span className="field-hint">Shown in the session list.</span>
+              </label>
+            </div>
             <div className="create-fields upload-grid upload-grid-single">
               <label
                 className={[
@@ -760,8 +788,8 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
                 type="button"
                 className="primary"
                 onClick={handleCreateUpload}
-                disabled={creating || !uploadCsvFile}
-                title={!uploadCsvFile ? "Select a CSV file first." : undefined}
+                disabled={uploadCreateDisabled}
+                title={uploadCreateDisabledTitle}
               >
                 {creating ? "Uploading..." : publicMode ? "Create a Session" : "Open Session"}
               </button>
