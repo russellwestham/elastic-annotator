@@ -547,7 +547,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
 
             <div className="create-actions upload-actions">
               <button type="button" className="primary" onClick={handleCreateUpload} disabled={creating}>
-                {creating ? "Uploading..." : publicMode ? "Create CSV Session" : "Open in Editor"}
+                {creating ? "Uploading..." : publicMode ? "Create a Session" : "Open in Editor"}
               </button>
               {!publicMode && (
                 <label className="check-row compact-check">
