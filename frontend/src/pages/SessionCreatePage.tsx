@@ -628,22 +628,6 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
         {publicMode ? (
           <div className="public-page-heading">
             <h1>ELASTIC Annotator</h1>
-            <div className="public-intake-guide" aria-label="CSV session creation notes">
-              <div className="public-intake-guide-item">
-                <span className="public-intake-step">1</span>
-                <span className="public-intake-copy">
-                  <strong>CSV first</strong>
-                  <span>Create a session from your CSV. You can upload videos after the session is created.</span>
-                </span>
-              </div>
-              <div className="public-intake-guide-item is-important">
-                <span className="public-intake-step">2</span>
-                <span className="public-intake-copy">
-                  <strong>Save the session URL</strong>
-                  <span>The URL is your edit link. Without it, the session opens read-only.</span>
-                </span>
-              </div>
-            </div>
           </div>
         ) : (
           <div className="mode-tabs" role="tablist" aria-label="Session intake mode">
@@ -752,7 +736,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
                   {uploadCsvFile
                     ? "Choose another file"
                     : publicMode
-                      ? "Videos can be uploaded after creation"
+                      ? "Select a .csv file"
                       : "Any .csv file"}
                 </span>
                 <input
@@ -824,7 +808,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
               <span className="edit-link-modal-kicker">Session Created</span>
               <h2 id="edit-link-modal-title">Save this edit link</h2>
               <p>
-                This URL is required to keep editing {createdEditTitle}. Without it, the session opens read-only.
+                Copy this link before opening {createdEditTitle}. It is required to edit this session later.
               </p>
             </div>
             <label className="edit-link-field">
@@ -839,16 +823,19 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
               <button type="button" className="primary" onClick={() => void handleCopyCreatedEditUrl()}>
                 {copyState === "copied" ? "Copied" : "Copy Link"}
               </button>
-              <button type="button" onClick={() => window.location.assign(createdEditUrl)}>
+              <button
+                type="button"
+                onClick={() => window.location.assign(createdEditUrl)}
+                disabled={copyState !== "copied"}
+                title={copyState !== "copied" ? "Copy the edit link first." : undefined}
+              >
                 Open Session
-              </button>
-              <button type="button" onClick={() => setCreatedEditUrl(null)}>
-                Close
               </button>
             </div>
             {copyState === "error" && (
               <p className="edit-link-copy-state error-text">
                 Copy failed. Select the URL and copy it manually.
+                <button type="button" onClick={() => setCopyState("copied")}>I copied it manually</button>
               </p>
             )}
           </section>

@@ -655,6 +655,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
     });
   }, [videoSegments]);
   const showVideoUploader = isPublicEditable && (isUploadSession || !!videoUrl);
+  const shouldEmphasizeVideoUpload = isUploadSession && !videoUrl && !isPublicReadOnly;
 
 
   const playheadStartFrame = activeVideoSegment?.start_frame ?? 0;
@@ -2147,11 +2148,15 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
             </>
           ) : isUploadSession ? (
             <div className="video-empty-state">
-              <span className="panel-kicker">{isPublicReadOnly ? "No Video" : "Video Pending"}</span>
-              <h3>{isPublicReadOnly ? "No video available for this public baseline" : "Add the first video segment"}</h3>
-              <p className="muted">This session was created from CSV only, so the video panel is still empty.</p>
+              <span className="panel-kicker">{isPublicReadOnly ? "No Video" : "Video Required"}</span>
+              <h3>{isPublicReadOnly ? "No video available for this public baseline" : "Upload a video to start reviewing"}</h3>
+              <p className="muted">
+                {isPublicReadOnly
+                  ? "This shared session does not include a video segment."
+                  : "Choose a video file below to enable playback and frame-level review."}
+              </p>
               {!isPublicReadOnly && (
-                <p className="muted compact-note">Upload a segment below to enable frame scrubbing, timing calibration, and video-assisted review.</p>
+                <span className="video-empty-arrow" aria-hidden="true">↓</span>
               )}
             </div>
           ) : (
@@ -2160,16 +2165,33 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
         </section>
 
         {showVideoUploader && (
-          <section className="video-uploader-panel card workspace-card">
+          <section
+            className={[
+              "video-uploader-panel",
+              "card",
+              "workspace-card",
+              shouldEmphasizeVideoUpload ? "is-primary-video-step" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+          >
             <div className="panel-heading">
               <div className="panel-title-group">
-                <h2>Add or Replace Video</h2>
-                <span className="meta-pill">{videoSegments.length} segments</span>
+                <h2>{shouldEmphasizeVideoUpload ? "Upload Video" : "Add or Replace Video"}</h2>
+                {shouldEmphasizeVideoUpload ? (
+                  <span className="meta-pill">Required</span>
+                ) : (
+                  <span className="meta-pill">{videoSegments.length} segments</span>
+                )}
               </div>
             </div>
             <div className="video-segment-editor">
               <div className="upload-context">
-                <p className="muted compact-note">Select a video file to replace or add as a new segment.</p>
+                <p className="muted compact-note">
+                  {shouldEmphasizeVideoUpload
+                    ? "Select the first video file for this CSV session."
+                    : "Select a video file to replace or add as a new segment."}
+                </p>
               </div>
               <div className="upload-controls-group">
                 <label className={`video-segment-upload${uploadingSegment ? " is-disabled" : ""}`}>

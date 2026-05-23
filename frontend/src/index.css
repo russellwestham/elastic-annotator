@@ -770,7 +770,17 @@ a.button-link.primary .spinner {
 }
 
 .edit-link-copy-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
   font-size: 0.84rem;
+}
+
+.edit-link-copy-state button {
+  padding: 0.38rem 0.6rem;
+  border-radius: 10px;
+  font-size: 0.78rem;
 }
 
 .status-panel {
@@ -1641,6 +1651,20 @@ a.button-link.primary .spinner {
   margin: 0;
 }
 
+.video-empty-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  margin-top: 0.25rem;
+  border-radius: 999px;
+  background: #0f766e;
+  color: #fff;
+  font-size: 1.2rem;
+  font-weight: 800;
+}
+
 .video-timing-panel {
   margin-top: 0.85rem;
   display: grid;
@@ -1768,6 +1792,33 @@ a.button-link.primary .spinner {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 14px;
+}
+
+.video-uploader-panel.is-primary-video-step {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12), var(--shadow-sm);
+}
+
+.video-uploader-panel.is-primary-video-step .panel-title-group h2 {
+  font-size: 1.18rem;
+}
+
+.video-uploader-panel.is-primary-video-step .video-segment-editor {
+  border-color: #9bd4ca;
+  background:
+    linear-gradient(180deg, rgba(239, 253, 250, 0.98) 0%, rgba(232, 247, 245, 0.94) 100%);
+}
+
+.video-uploader-panel.is-primary-video-step .video-segment-upload-button {
+  min-height: 2.8rem;
+  min-width: 13rem;
+  border-color: #0f766e;
+  color: #0f4f49;
+  font-weight: 760;
+}
+
+.video-uploader-panel.is-primary-video-step .upload-controls-group .primary {
+  min-height: 2.8rem;
 }
 
 .upload-context {
@@ -2367,6 +2418,26 @@ a.button-link.primary .spinner {
 :root[data-theme="dark"] .section-header .panel-kicker,
 :root[data-theme="dark"] .eyebrow {
   color: var(--accent-strong);
+}
+
+:root[data-theme="dark"] .video-empty-arrow {
+  background: #14b8a6;
+  color: #06211f;
+}
+
+:root[data-theme="dark"] .video-uploader-panel.is-primary-video-step {
+  border-color: #2dd4bf;
+  box-shadow: 0 0 0 3px rgba(45, 212, 191, 0.14), var(--shadow-sm);
+}
+
+:root[data-theme="dark"] .video-uploader-panel.is-primary-video-step .video-segment-editor {
+  border-color: #26756c;
+  background: linear-gradient(180deg, rgba(19, 54, 50, 0.98) 0%, rgba(16, 42, 39, 0.96) 100%);
+}
+
+:root[data-theme="dark"] .video-uploader-panel.is-primary-video-step .video-segment-upload-button {
+  border-color: #2dd4bf;
+  color: #b5fff5;
 }
 
 :root[data-theme="dark"] .video-timing-preview,
