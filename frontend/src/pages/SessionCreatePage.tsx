@@ -405,9 +405,22 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
         {publicMode ? (
           <div className="public-page-heading">
             <h1>ELASTIC Annotator</h1>
-            <p className="muted panel-copy">
-              Upload a CSV to create an editable session. Add video segments inside the editor after it opens.
-            </p>
+            <div className="public-intake-guide" aria-label="CSV session creation notes">
+              <div className="public-intake-guide-item">
+                <span className="public-intake-step">1</span>
+                <span className="public-intake-copy">
+                  <strong>CSV first</strong>
+                  <span>Create a session from your CSV, then add video segments inside the editor.</span>
+                </span>
+              </div>
+              <div className="public-intake-guide-item is-important">
+                <span className="public-intake-step">2</span>
+                <span className="public-intake-copy">
+                  <strong>Save the editor URL</strong>
+                  <span>The URL is your edit link. Without it, the session opens read-only.</span>
+                </span>
+              </div>
+            </div>
           </div>
         ) : (
           <div className="mode-tabs" role="tablist" aria-label="Session intake mode">
@@ -526,11 +539,11 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
                 />
               </label>
             </div>
-            <p className="muted compact-note">
-              {publicMode
-                ? "Save the editor URL after creation. Without that link, the session opens read-only."
-                : "Create the session with CSV first. You can upload the video later inside the editor."}
-            </p>
+            {!publicMode && (
+              <p className="muted compact-note">
+                Create the session with CSV first. You can upload the video later inside the editor.
+              </p>
+            )}
 
             <div className="create-actions upload-actions">
               <button type="button" className="primary" onClick={handleCreateUpload} disabled={creating}>
