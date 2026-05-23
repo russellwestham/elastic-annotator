@@ -628,6 +628,9 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
         {publicMode ? (
           <div className="public-page-heading">
             <h1>ELASTIC Annotator</h1>
+            <p className="public-page-subtitle">
+              Open the shared Sportec sessions below for read-only review, or upload an event CSV to create your own editable session.
+            </p>
           </div>
         ) : (
           <div className="mode-tabs" role="tablist" aria-label="Session intake mode">
