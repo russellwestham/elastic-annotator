@@ -698,6 +698,81 @@ a.button-link.primary .spinner {
   padding: 0.2rem 0.1rem;
 }
 
+.edit-link-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(6px);
+}
+
+.edit-link-modal {
+  display: grid;
+  gap: 0.95rem;
+  width: min(100%, 34rem);
+  padding: 1.15rem;
+  border: 1px solid #b8cbd6;
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
+}
+
+.edit-link-modal-header {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.edit-link-modal-kicker {
+  width: fit-content;
+  border: 1px solid #bbf7d0;
+  border-radius: 999px;
+  padding: 0.22rem 0.55rem;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 0.72rem;
+  font-weight: 760;
+}
+
+.edit-link-modal h2 {
+  margin: 0;
+  font-size: 1.45rem;
+}
+
+.edit-link-modal p {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.edit-link-field {
+  display: grid;
+  gap: 0.36rem;
+  min-width: 0;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.edit-link-field input {
+  width: 100%;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+}
+
+.edit-link-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.edit-link-copy-state {
+  font-size: 0.84rem;
+}
+
 .status-panel {
   display: grid;
   gap: 0.8rem;
@@ -2138,6 +2213,22 @@ a.button-link.primary .spinner {
 }
 
 :root[data-theme="dark"] .recent-session-pill-editable {
+  border-color: #275c3d;
+  background: var(--success-soft);
+  color: #a7f3c4;
+}
+
+:root[data-theme="dark"] .edit-link-modal-backdrop {
+  background: rgba(2, 6, 12, 0.68);
+}
+
+:root[data-theme="dark"] .edit-link-modal {
+  border-color: var(--line);
+  background: var(--surface);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.52);
+}
+
+:root[data-theme="dark"] .edit-link-modal-kicker {
   border-color: #275c3d;
   background: var(--success-soft);
   color: #a7f3c4;

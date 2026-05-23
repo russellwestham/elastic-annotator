@@ -17,6 +17,7 @@ import {
 import type { MatchSummary, SessionStatus } from "../types";
 
 type CreateMode = "existing" | "upload";
+type CopyState = "idle" | "copied" | "error";
 
 function formatRelativeTime(iso: string, now: number): string {
   const dt = new Date(iso);
@@ -79,7 +80,7 @@ function getSessionTitle(session: SessionStatus): string {
 
 function getPublicSessionAccessLabel(session: SessionStatus): string | null {
   if (session.public_baseline) {
-    return "Locked Sportec";
+    return "Read-only Sportec";
   }
   if (session.public_editable) {
     return "Editable";
@@ -110,6 +111,10 @@ function buildOpenUrl(session: SessionStatus, publicMode: boolean): string {
   const token = session.edit_token?.trim();
   const qs = token ? `?edit_token=${encodeURIComponent(token)}` : "";
   return `/annotate/${encodeURIComponent(session.session_id)}${qs}`;
+}
+
+function toAbsoluteUrl(path: string): string {
+  return new URL(path, window.location.origin).toString();
 }
 
 interface SessionCreatePageProps {
@@ -144,6 +149,9 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
   const [savingTitleSessionId, setSavingTitleSessionId] = useState<string | null>(null);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const [relativeTimeNow, setRelativeTimeNow] = useState(() => Date.now());
+  const [createdEditUrl, setCreatedEditUrl] = useState<string | null>(null);
+  const [createdEditTitle, setCreatedEditTitle] = useState("");
+  const [copyState, setCopyState] = useState<CopyState>("idle");
 
   const loadMatches = async (root?: string): Promise<MatchSummary[]> => {
     if (publicMode) {
@@ -285,7 +293,14 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
           persist: persistUpload,
         });
       setStatus(created);
-      window.location.assign(buildOpenUrl(created, publicMode));
+      void loadRecentSessions();
+      if (publicMode) {
+        setCreatedEditUrl(toAbsoluteUrl(buildOpenUrl(created, true)));
+        setCreatedEditTitle(getSessionTitle(created));
+        setCopyState("idle");
+      } else {
+        window.location.assign(buildOpenUrl(created, false));
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -396,6 +411,19 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
       setError((err as Error).message);
     } finally {
       setDeletingSessionId(null);
+    }
+  };
+
+  const handleCopyCreatedEditUrl = async () => {
+    if (!createdEditUrl) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(createdEditUrl);
+      setCopyState("copied");
+    } catch {
+      setCopyState("error");
     }
   };
 
@@ -546,7 +574,13 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
             )}
 
             <div className="create-actions upload-actions">
-              <button type="button" className="primary" onClick={handleCreateUpload} disabled={creating}>
+              <button
+                type="button"
+                className="primary"
+                onClick={handleCreateUpload}
+                disabled={creating || !uploadCsvFile}
+                title={!uploadCsvFile ? "Select a CSV file first." : undefined}
+              >
                 {creating ? "Uploading..." : publicMode ? "Create a Session" : "Open in Editor"}
               </button>
               {!publicMode && (
@@ -570,7 +604,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
             <h2>{publicMode ? "Annotation Sessions" : "Recent Sessions"}</h2>
             <p className="muted panel-copy">
               {publicMode
-                ? "Shared Sportec match sessions are locked for inspection and CSV download. New CSV sessions appear here and remain editable from their saved URL."
+                ? "Shared Sportec match sessions are read-only and available for CSV download. New CSV sessions appear here and stay editable from their saved URL."
                 : "Jump back into recent work without rebuilding the same setup."}
             </p>
           </div>
@@ -721,6 +755,49 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
       </section>
 
       {error && <pre className="error-box">{error}</pre>}
+
+      {createdEditUrl && (
+        <div className="edit-link-modal-backdrop" role="presentation">
+          <section
+            className="edit-link-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-link-modal-title"
+          >
+            <div className="edit-link-modal-header">
+              <span className="edit-link-modal-kicker">Session Created</span>
+              <h2 id="edit-link-modal-title">Save this edit link</h2>
+              <p>
+                This URL is required to keep editing {createdEditTitle}. Without it, the session opens read-only.
+              </p>
+            </div>
+            <label className="edit-link-field">
+              Editor URL
+              <input
+                readOnly
+                value={createdEditUrl}
+                onFocus={(event) => event.currentTarget.select()}
+              />
+            </label>
+            <div className="edit-link-modal-actions">
+              <button type="button" className="primary" onClick={() => void handleCopyCreatedEditUrl()}>
+                {copyState === "copied" ? "Copied" : "Copy Link"}
+              </button>
+              <button type="button" onClick={() => window.location.assign(createdEditUrl)}>
+                Open Editor
+              </button>
+              <button type="button" onClick={() => setCreatedEditUrl(null)}>
+                Close
+              </button>
+            </div>
+            {copyState === "error" && (
+              <p className="edit-link-copy-state error-text">
+                Copy failed. Select the URL and copy it manually.
+              </p>
+            )}
+          </section>
+        </div>
+      )}
     </div>
   );
 }
