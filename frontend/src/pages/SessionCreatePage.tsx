@@ -810,10 +810,13 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
             <div className="edit-link-modal-header">
               <span className="edit-link-modal-kicker">Session Created</span>
               <h2 id="edit-link-modal-title">Save this edit link</h2>
-              <p className="edit-link-warning">
-                <strong>Only this edit link can modify the session.</strong>
-                <span>Save it before opening {createdEditTitle}.</span>
-              </p>
+              <div className="edit-link-warning" role="alert">
+                <span className="edit-link-warning-icon" aria-hidden="true">!</span>
+                <span className="edit-link-warning-copy">
+                  <strong>Save this link now.</strong>
+                  <span>Only this edit link can modify {createdEditTitle} later.</span>
+                </span>
+              </div>
             </div>
             <label className="edit-link-field">
               Edit link
