@@ -4,6 +4,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { AnnotationPage } from "./pages/AnnotationPage";
 import { MatchRedirectPage } from "./pages/MatchRedirectPage";
 import { SessionCreatePage } from "./pages/SessionCreatePage";
+import { ADMIN_BASE_PATH } from "./routePaths";
 
 type ThemeMode = "light" | "dark";
 
@@ -49,10 +50,10 @@ function App() {
         <Route path="/public" element={<Navigate to="/" replace />} />
         <Route path="/annotate/:sessionId" element={<AnnotationPage publicMode />} />
         <Route path="/public/annotate/:sessionId" element={<AnnotationPage publicMode />} />
-        <Route path="/admin" element={<SessionCreatePage />} />
-        <Route path="/admin/m/:matchId" element={<MatchRedirectPage basePath="/admin" />} />
-        <Route path="/admin/annotate/m/:matchId" element={<AnnotationPage />} />
-        <Route path="/admin/annotate/:sessionId" element={<AnnotationPage />} />
+        <Route path={ADMIN_BASE_PATH} element={<SessionCreatePage />} />
+        <Route path={`${ADMIN_BASE_PATH}/m/:matchId`} element={<MatchRedirectPage basePath={ADMIN_BASE_PATH} />} />
+        <Route path={`${ADMIN_BASE_PATH}/annotate/m/:matchId`} element={<AnnotationPage />} />
+        <Route path={`${ADMIN_BASE_PATH}/annotate/:sessionId`} element={<AnnotationPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>

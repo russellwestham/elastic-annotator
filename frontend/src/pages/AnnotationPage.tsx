@@ -26,6 +26,7 @@ import {
   updateSessionVideoTiming,
 } from "../api";
 import { EventTable } from "../components/EventTable";
+import { ADMIN_BASE_PATH } from "../routePaths";
 import type {
   ErrorType,
   EventRow,
@@ -1832,7 +1833,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
         <section className="card status-panel">
           <h1>{sessionLabel}</h1>
           <p className="muted">{session.progress ?? "processing"}</p>
-          <Link className="button-link" to={publicMode ? "/" : "/admin"}>Back to Sessions</Link>
+          <Link className="button-link" to={publicMode ? "/" : ADMIN_BASE_PATH}>Back to Sessions</Link>
         </section>
       </div>
     );
@@ -1844,7 +1845,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
         <section className="card status-panel">
           <h1>{sessionLabel}</h1>
           <pre className="error-box">{session.error_message}</pre>
-          <Link className="button-link" to={publicMode ? "/" : "/admin"}>Back to Sessions</Link>
+          <Link className="button-link" to={publicMode ? "/" : ADMIN_BASE_PATH}>Back to Sessions</Link>
         </section>
       </div>
     );
@@ -1934,7 +1935,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
             </a>
           </div>
           <div className="annot-action-group annot-action-group-manage">
-            <Link className="button-link" to={publicMode ? "/" : "/admin"}>Back to Sessions</Link>
+            <Link className="button-link" to={publicMode ? "/" : ADMIN_BASE_PATH}>Back to Sessions</Link>
             <button
               type="button"
               onClick={() => void handleUndoTimeline()}

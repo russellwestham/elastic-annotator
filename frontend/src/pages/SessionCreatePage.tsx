@@ -14,6 +14,7 @@ import {
   fetchSessions,
   updateSessionMetadata,
 } from "../api";
+import { ADMIN_BASE_PATH } from "../routePaths";
 import type { MatchSummary, SessionStatus } from "../types";
 
 type CreateMode = "existing" | "upload";
@@ -106,7 +107,7 @@ function getPublicSessionSupportingText(session: SessionStatus): string | null {
 
 function buildOpenUrl(session: SessionStatus, publicMode: boolean): string {
   if (!publicMode) {
-    return `/admin${buildSessionOpenUrl(session)}`;
+    return `${ADMIN_BASE_PATH}${buildSessionOpenUrl(session)}`;
   }
   const token = session.edit_token?.trim();
   const qs = token ? `?edit_token=${encodeURIComponent(token)}` : "";
@@ -119,6 +120,200 @@ function toAbsoluteUrl(path: string): string {
 
 interface SessionCreatePageProps {
   publicMode?: boolean;
+}
+
+interface SessionListPanelProps {
+  publicMode: boolean;
+  sessions: SessionStatus[];
+  loading: boolean;
+  relativeTimeNow: number;
+  editingTitleSessionId: string | null;
+  editingTitleValue: string;
+  savingTitleSessionId: string | null;
+  deletingSessionId: string | null;
+  onTitleValueChange: (value: string) => void;
+  onRefresh: () => void;
+  onBeginTitleEdit: (session: SessionStatus) => void;
+  onCancelTitleEdit: () => void;
+  onSaveTitleEdit: (session: SessionStatus) => void;
+  onDeleteSession: (session: SessionStatus) => void;
+}
+
+function SessionListPanel({
+  publicMode,
+  sessions,
+  loading,
+  relativeTimeNow,
+  editingTitleSessionId,
+  editingTitleValue,
+  savingTitleSessionId,
+  deletingSessionId,
+  onTitleValueChange,
+  onRefresh,
+  onBeginTitleEdit,
+  onCancelTitleEdit,
+  onSaveTitleEdit,
+  onDeleteSession,
+}: SessionListPanelProps) {
+  return (
+    <section className="card recent-panel">
+      <div className="section-header recent-session-header">
+        <div>
+          <h2>{publicMode ? "Annotation Sessions" : "Recent Sessions"}</h2>
+          <p className="muted panel-copy">
+            {publicMode
+              ? "Shared Sportec match sessions are read-only and available for CSV download. New CSV sessions appear here and stay editable from their saved URL."
+              : "Jump back into recent work without rebuilding the same setup."}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="recent-session-refresh"
+          onClick={onRefresh}
+          disabled={loading}
+        >
+          {loading ? "Refreshing..." : "Refresh"}
+        </button>
+      </div>
+
+      {sessions.length > 0 ? (
+        <div className="recent-session-list">
+          {sessions.map((session) => {
+            const openUrl = buildOpenUrl(session, publicMode);
+            const isEditingTitle = editingTitleSessionId === session.session_id;
+            const isSavingTitle = savingTitleSessionId === session.session_id;
+            const isDeleting = deletingSessionId === session.session_id;
+            const titleLabel = getSessionTitle(session);
+            const publicAccessLabel = publicMode ? getPublicSessionAccessLabel(session) : null;
+            const publicSupportingText = publicMode ? getPublicSessionSupportingText(session) : null;
+            return (
+              <article
+                key={session.session_id}
+                className={[
+                  "recent-session-item",
+                  isDeleting ? "is-busy" : "",
+                  publicMode && session.public_baseline ? "is-public-baseline" : "",
+                  publicMode && session.public_editable ? "is-public-editable" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+              >
+                <div className="recent-session-main">
+                  {isEditingTitle ? (
+                    <div className="session-title-editor recent-session-title-editor">
+                      <input
+                        value={editingTitleValue}
+                        onChange={(e) => onTitleValueChange(e.target.value)}
+                        placeholder={titleLabel}
+                        disabled={isSavingTitle || isDeleting}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            onSaveTitleEdit(session);
+                          }
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            onCancelTitleEdit();
+                          }
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <h3 className="recent-session-title">{titleLabel}</h3>
+                  )}
+
+                  <div className="recent-session-meta">
+                    {session.status !== "ready" && (
+                      <span className={`recent-session-status recent-session-status-${session.status}`}>
+                        {getSessionStatusLabel(session.status)}
+                      </span>
+                    )}
+                    {!publicMode && <span className="recent-session-pill">{getSessionModeLabel(session)}</span>}
+                    {publicAccessLabel && (
+                      <span
+                        className={[
+                          "recent-session-pill",
+                          session.public_baseline ? "recent-session-pill-lock" : "",
+                          session.public_editable ? "recent-session-pill-editable" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
+                      >
+                        {publicAccessLabel}
+                      </span>
+                    )}
+                    <span className="recent-session-pill">{formatRelativeTime(session.updated_at, relativeTimeNow)}</span>
+                  </div>
+
+                  <div className="recent-session-supporting">
+                    <span>Session ID {session.session_id}</span>
+                    {publicSupportingText && <span>{publicSupportingText}</span>}
+                  </div>
+                </div>
+
+                <div className="recent-session-actions">
+                  {isEditingTitle ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => onSaveTitleEdit(session)}
+                        disabled={isSavingTitle || isDeleting}
+                      >
+                        {isSavingTitle ? "Saving..." : "Save"}
+                      </button>
+                      <button type="button" onClick={onCancelTitleEdit} disabled={isSavingTitle || isDeleting}>
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <a
+                        className="button-link primary recent-session-open"
+                        href={openUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-disabled={isDeleting}
+                        onClick={(event) => {
+                          if (isDeleting) {
+                            event.preventDefault();
+                          }
+                        }}
+                      >
+                        Open
+                      </a>
+                      {!publicMode && (
+                        <button
+                          type="button"
+                          className="session-title-edit-button"
+                          onClick={() => onBeginTitleEdit(session)}
+                          disabled={isDeleting}
+                        >
+                          Edit Title
+                        </button>
+                      )}
+                    </>
+                  )}
+
+                  {!publicMode && (
+                    <button
+                      type="button"
+                      className="danger session-delete-button"
+                      onClick={() => onDeleteSession(session)}
+                      disabled={isDeleting || isSavingTitle}
+                    >
+                      {isDeleting ? "Deleting..." : "Delete"}
+                    </button>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="recent-session-empty muted">No recent sessions yet.</div>
+      )}
+    </section>
+  );
 }
 
 export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps) {
@@ -353,7 +548,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
     setOpeningLatest(true);
     setError(null);
     try {
-      navigate(`/admin/m/${encodeURIComponent(matchId)}`);
+      navigate(`${ADMIN_BASE_PATH}/m/${encodeURIComponent(matchId)}`);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -438,13 +633,13 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
                 <span className="public-intake-step">1</span>
                 <span className="public-intake-copy">
                   <strong>CSV first</strong>
-                  <span>Create a session from your CSV, then add video segments inside the editor.</span>
+                  <span>Create a session from your CSV. You can upload videos after the session is created.</span>
                 </span>
               </div>
               <div className="public-intake-guide-item is-important">
                 <span className="public-intake-step">2</span>
                 <span className="public-intake-copy">
-                  <strong>Save the editor URL</strong>
+                  <strong>Save the session URL</strong>
                   <span>The URL is your edit link. Without it, the session opens read-only.</span>
                 </span>
               </div>
@@ -557,7 +752,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
                   {uploadCsvFile
                     ? "Choose another file"
                     : publicMode
-                      ? "Video upload happens inside the editor"
+                      ? "Videos can be uploaded after creation"
                       : "Any .csv file"}
                 </span>
                 <input
@@ -569,7 +764,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
             </div>
             {!publicMode && (
               <p className="muted compact-note">
-                Create the session with CSV first. You can upload the video later inside the editor.
+                Create the session with CSV first. You can upload videos after it opens.
               </p>
             )}
 
@@ -581,7 +776,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
                 disabled={creating || !uploadCsvFile}
                 title={!uploadCsvFile ? "Select a CSV file first." : undefined}
               >
-                {creating ? "Uploading..." : publicMode ? "Create a Session" : "Open in Editor"}
+                {creating ? "Uploading..." : publicMode ? "Create a Session" : "Open Session"}
               </button>
               {!publicMode && (
                 <label className="check-row compact-check">
@@ -598,161 +793,22 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
         )}
       </section>
 
-      <section className="card recent-panel">
-        <div className="section-header recent-session-header">
-          <div>
-            <h2>{publicMode ? "Annotation Sessions" : "Recent Sessions"}</h2>
-            <p className="muted panel-copy">
-              {publicMode
-                ? "Shared Sportec match sessions are read-only and available for CSV download. New CSV sessions appear here and stay editable from their saved URL."
-                : "Jump back into recent work without rebuilding the same setup."}
-            </p>
-          </div>
-          <button
-            type="button"
-            className="recent-session-refresh"
-            onClick={() => void loadRecentSessions()}
-            disabled={loadingRecentSessions}
-          >
-            {loadingRecentSessions ? "Refreshing..." : "Refresh"}
-          </button>
-        </div>
-
-        {recentSessions.length > 0 ? (
-          <div className="recent-session-list">
-            {recentSessions.map((session) => {
-              const openUrl = buildOpenUrl(session, publicMode);
-              const isEditingTitle = editingTitleSessionId === session.session_id;
-              const isSavingTitle = savingTitleSessionId === session.session_id;
-              const isDeleting = deletingSessionId === session.session_id;
-              const titleLabel = getSessionTitle(session);
-              const publicAccessLabel = publicMode ? getPublicSessionAccessLabel(session) : null;
-              const publicSupportingText = publicMode ? getPublicSessionSupportingText(session) : null;
-              return (
-                <article
-                  key={session.session_id}
-                  className={[
-                    "recent-session-item",
-                    isDeleting ? "is-busy" : "",
-                    publicMode && session.public_baseline ? "is-public-baseline" : "",
-                    publicMode && session.public_editable ? "is-public-editable" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                >
-                  <div className="recent-session-main">
-                    {isEditingTitle ? (
-                      <div className="session-title-editor recent-session-title-editor">
-                        <input
-                          value={editingTitleValue}
-                          onChange={(e) => setEditingTitleValue(e.target.value)}
-                          placeholder={titleLabel}
-                          disabled={isSavingTitle || isDeleting}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              void saveTitleEdit(session);
-                            }
-                            if (event.key === "Escape") {
-                              event.preventDefault();
-                              cancelTitleEdit();
-                            }
-                          }}
-                        />
-                      </div>
-                    ) : (
-                      <h3 className="recent-session-title">{titleLabel}</h3>
-                    )}
-
-                    <div className="recent-session-meta">
-                      <span className={`recent-session-status recent-session-status-${session.status}`}>
-                        {getSessionStatusLabel(session.status)}
-                      </span>
-                      {!publicMode && <span className="recent-session-pill">{getSessionModeLabel(session)}</span>}
-                      {publicAccessLabel && (
-                        <span
-                          className={[
-                            "recent-session-pill",
-                            session.public_baseline ? "recent-session-pill-lock" : "",
-                            session.public_editable ? "recent-session-pill-editable" : "",
-                          ]
-                            .filter(Boolean)
-                            .join(" ")}
-                        >
-                          {publicAccessLabel}
-                        </span>
-                      )}
-                      <span className="recent-session-pill">{formatRelativeTime(session.updated_at, relativeTimeNow)}</span>
-                    </div>
-
-                    <div className="recent-session-supporting">
-                      <span>Session ID {session.session_id}</span>
-                      {publicSupportingText && <span>{publicSupportingText}</span>}
-                    </div>
-                  </div>
-
-                  <div className="recent-session-actions">
-                    {isEditingTitle ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => void saveTitleEdit(session)}
-                          disabled={isSavingTitle || isDeleting}
-                        >
-                          {isSavingTitle ? "Saving..." : "Save"}
-                        </button>
-                        <button type="button" onClick={cancelTitleEdit} disabled={isSavingTitle || isDeleting}>
-                          Cancel
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <a
-                          className="button-link primary recent-session-open"
-                          href={openUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          aria-disabled={isDeleting}
-                          onClick={(event) => {
-                            if (isDeleting) {
-                              event.preventDefault();
-                            }
-                          }}
-                        >
-                          Open
-                        </a>
-                        {!publicMode && (
-                          <button
-                            type="button"
-                            className="session-title-edit-button"
-                            onClick={() => beginTitleEdit(session)}
-                            disabled={isDeleting}
-                          >
-                            Edit Title
-                          </button>
-                        )}
-                      </>
-                    )}
-
-                    {!publicMode && (
-                      <button
-                        type="button"
-                        className="danger session-delete-button"
-                        onClick={() => void handleDeleteSession(session)}
-                        disabled={isDeleting || isSavingTitle}
-                      >
-                        {isDeleting ? "Deleting..." : "Delete"}
-                      </button>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="recent-session-empty muted">No recent sessions yet.</div>
-        )}
-      </section>
+      <SessionListPanel
+        publicMode={publicMode}
+        sessions={recentSessions}
+        loading={loadingRecentSessions}
+        relativeTimeNow={relativeTimeNow}
+        editingTitleSessionId={editingTitleSessionId}
+        editingTitleValue={editingTitleValue}
+        savingTitleSessionId={savingTitleSessionId}
+        deletingSessionId={deletingSessionId}
+        onTitleValueChange={setEditingTitleValue}
+        onRefresh={() => void loadRecentSessions()}
+        onBeginTitleEdit={beginTitleEdit}
+        onCancelTitleEdit={cancelTitleEdit}
+        onSaveTitleEdit={(session) => void saveTitleEdit(session)}
+        onDeleteSession={(session) => void handleDeleteSession(session)}
+      />
 
       {error && <pre className="error-box">{error}</pre>}
 
@@ -772,7 +828,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
               </p>
             </div>
             <label className="edit-link-field">
-              Editor URL
+              Edit link
               <input
                 readOnly
                 value={createdEditUrl}
@@ -784,7 +840,7 @@ export function SessionCreatePage({ publicMode = false }: SessionCreatePageProps
                 {copyState === "copied" ? "Copied" : "Copy Link"}
               </button>
               <button type="button" onClick={() => window.location.assign(createdEditUrl)}>
-                Open Editor
+                Open Session
               </button>
               <button type="button" onClick={() => setCreatedEditUrl(null)}>
                 Close
