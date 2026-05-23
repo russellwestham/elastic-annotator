@@ -1494,8 +1494,8 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
       if (nextIndex >= 0) {
         setSelectedVideoIndex(nextIndex);
       }
-      setSaveState("saved");
-      setSaveMessage("Video timing saved");
+      setSaveState("idle");
+      setSaveMessage("");
     } catch (err) {
       setSaveState("error");
       setSaveMessage((err as Error).message);
@@ -2070,61 +2070,61 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                   </div>
                 )}
               </div>
-              <div className="video-timing-panel" ref={timingCalibrationRef}>
-                <div className="video-timing-heading">
-                  <div>
-                    <h3>Video Timing</h3>
-                    <p className="muted compact-note">
-                      Set where this video starts in match frames.
-                    </p>
-                  </div>
-                  <div className="video-timing-status">
-                    <span className={`video-timing-chip${activeVideoHasTiming ? " is-ready" : " is-pending"}`}>
-                      {activeVideoHasTiming ? "Video timing set" : "Needs video timing"}
-                    </span>
-                    <span className="video-timing-chip">25 fps</span>
-                  </div>
-                </div>
-                <div className="video-timing-layout">
-                  <div className="video-timing-fields">
-                    <label>
-                      Period start frame
-                      <input
-                        type="number"
-                        min={0}
-                        value={segmentTimingPeriodStartFrame}
-                        onChange={(event) => setSegmentTimingPeriodStartFrame(event.target.value)}
-                        placeholder="e.g. 10000"
-                        disabled={!isPublicEditable || savingSegmentTiming}
-                      />
-                    </label>
-                    <label>
-                      Video start time
-                      <input
-                        type="text"
-                        value={segmentTimingVideoStartTime}
-                        onChange={(event) => setSegmentTimingVideoStartTime(event.target.value)}
-                        placeholder="e.g. 00:10 or 10"
-                        disabled={!isPublicEditable || savingSegmentTiming}
-                      />
-                    </label>
-                    <div className="video-timing-preview">
-                      <span className="video-timing-preview-label">Derived start frame</span>
-                      <strong>{pendingDerivedStartFrame?.toLocaleString("en-US") ?? "-"}</strong>
+              {activeVideoSegment && !activeVideoHasTiming && (
+                <div className="video-timing-panel" ref={timingCalibrationRef}>
+                  <div className="video-timing-heading">
+                    <div>
+                      <h3>Video Timing</h3>
+                      <p className="muted compact-note">
+                        Set where this video starts in match frames.
+                      </p>
+                    </div>
+                    <div className="video-timing-status">
+                      <span className="video-timing-chip is-pending">Needs video timing</span>
+                      <span className="video-timing-chip">25 fps</span>
                     </div>
                   </div>
-                  <div className="video-timing-actions">
-                    <button
-                      type="button"
-                      className="primary"
-                      onClick={() => void handleApplySegmentTiming()}
-                      disabled={!isPublicEditable || savingSegmentTiming || !activeVideoSegment}
-                    >
-                      {savingSegmentTiming ? "Saving..." : "Save Video Timing"}
-                    </button>
+                  <div className="video-timing-layout">
+                    <div className="video-timing-fields">
+                      <label>
+                        Period start frame
+                        <input
+                          type="number"
+                          min={0}
+                          value={segmentTimingPeriodStartFrame}
+                          onChange={(event) => setSegmentTimingPeriodStartFrame(event.target.value)}
+                          placeholder="e.g. 10000"
+                          disabled={!isPublicEditable || savingSegmentTiming}
+                        />
+                      </label>
+                      <label>
+                        Video start time
+                        <input
+                          type="text"
+                          value={segmentTimingVideoStartTime}
+                          onChange={(event) => setSegmentTimingVideoStartTime(event.target.value)}
+                          placeholder="e.g. 00:10 or 10"
+                          disabled={!isPublicEditable || savingSegmentTiming}
+                        />
+                      </label>
+                      <div className="video-timing-preview">
+                        <span className="video-timing-preview-label">Derived start frame</span>
+                        <strong>{pendingDerivedStartFrame?.toLocaleString("en-US") ?? "-"}</strong>
+                      </div>
+                    </div>
+                    <div className="video-timing-actions">
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={() => void handleApplySegmentTiming()}
+                        disabled={!isPublicEditable || savingSegmentTiming || !activeVideoSegment}
+                      >
+                        {savingSegmentTiming ? "Saving..." : "Save Video Timing"}
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
               <div className="row controls-row">
                 <button onClick={() => jump(-5)}>-5s</button>
                 <button
