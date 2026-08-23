@@ -534,7 +534,6 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
   const hasPendingRowChanges = !!(selectedRow && draftRow && !isSameEventRow(selectedRow, draftRow));
   const selectedAnchorFrame = getAnchorFrame(selectedRow);
   const draftPlayerId = draftRow?.player_id ?? selectedRow?.player_id ?? "";
-  const draftReceiverId = draftRow?.receiver_id ?? selectedRow?.receiver_id ?? "";
 
   const knownEntityIds = useMemo(() => {
     const idSet = new Set<string>();
@@ -550,14 +549,12 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
   const knownEntityIdSet = useMemo(() => new Set(knownEntityIds), [knownEntityIds]);
   const initialEventById = useMemo(() => new Map(initialEvents.map((row) => [row.id, row])), [initialEvents]);
   const isDraftPlayerIdValid = isValidEntityId(draftRow?.player_id, false, knownEntityIdSet);
-  const isDraftReceiverIdValid = isValidEntityId(draftRow?.receiver_id, true, knownEntityIdSet);
   const canConfirmRowChanges = !!(
     isPublicEditable
     && selectedRow
     && draftRow
     && hasPendingRowChanges
     && isDraftPlayerIdValid
-    && isDraftReceiverIdValid
   );
   const initialSelectedRow = selectedRow ? initialEventById.get(selectedRow.id) ?? null : null;
   const editableSelectedRow = draftRow ?? selectedRow;
@@ -583,9 +580,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
       ? "No edits to apply."
       : !isDraftPlayerIdValid
         ? "Check player_id."
-        : !isDraftReceiverIdValid
-          ? "Check receiver_id."
-          : "";
+        : "";
   const syncedTimingPoints = useMemo(() => {
     const points: Array<{ periodId: number; frameId: number; offset: number }> = [];
     for (const row of events) {
@@ -1154,11 +1149,6 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
       setSaveMessage("Select a valid player_id before aligning.");
       return;
     }
-    if (!isValidEntityId(sourceRow.receiver_id, true, knownEntityIdSet)) {
-      setSaveState("error");
-      setSaveMessage("Select a valid receiver_id or leave it blank before aligning.");
-      return;
-    }
 
     const targetTimestamp =
       nextEventRow.synced_ts
@@ -1293,12 +1283,6 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
       return;
     }
 
-    if (!isValidEntityId(draftRow.receiver_id, true, knownEntityIdSet)) {
-      setSaveState("error");
-      setSaveMessage("Select a valid receiver_id or leave it blank.");
-      return;
-    }
-
     const nextEvents = [...events];
     nextEvents[selectedIndex] = draftRow;
     setEvents(nextEvents);
@@ -1366,27 +1350,19 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
     setSaveMessage(`Removed event #${selectedIndex + 1} because it is not in the original CSV`);
   };
 
-  const applyCurrentTo = (field: "synced" | "receive") => {
+  const applyCurrentToSynced = () => {
     if (!isPublicEditable) return;
     if (!draftRow) return;
     const frame = currentFrame;
     const ts = getEventTimestampForFrame(frame, draftRow.period_id);
-    if (field === "synced") {
-      updateDraftRow({ synced_ts: ts, synced_frame_id: frame });
-    } else {
-      updateDraftRow({ receive_ts: ts, receive_frame_id: frame });
-    }
+    updateDraftRow({ synced_ts: ts, synced_frame_id: frame });
   };
 
-  const updateFrameAndTimestamp = (field: "synced" | "receive", rawValue: string) => {
+  const updateSyncedFrameAndTimestamp = (rawValue: string) => {
     if (!isPublicEditable) return;
     const trimmed = rawValue.trim();
     if (trimmed === "") {
-      if (field === "synced") {
-        updateDraftRow({ synced_frame_id: null, synced_ts: "" });
-      } else {
-        updateDraftRow({ receive_frame_id: null, receive_ts: "" });
-      }
+      updateDraftRow({ synced_frame_id: null, synced_ts: "" });
       return;
     }
 
@@ -1397,11 +1373,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
     const frame = Math.round(parsed);
     const targetPeriodId = draftRow?.period_id ?? selectedRow?.period_id ?? 1;
     const ts = getEventTimestampForFrame(frame, targetPeriodId);
-    if (field === "synced") {
-      updateDraftRow({ synced_frame_id: frame, synced_ts: ts });
-    } else {
-      updateDraftRow({ receive_frame_id: frame, receive_ts: ts });
-    }
+    updateDraftRow({ synced_frame_id: frame, synced_ts: ts });
   };
 
   const jump = (delta: number) => {
@@ -2321,17 +2293,14 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                   </div>
                   <div className="event-detail-grid">
                     {[
-                      { label: "Period", value: selectedRow.period_id },
-                      { label: "Event type", value: selectedRow.spadl_type },
-                      { label: "Player", value: selectedRow.player_id },
-                      { label: "Synced frame", value: selectedRow.synced_frame_id },
-                      { label: "Synced time", value: selectedRow.synced_ts },
-                      { label: "Receiver", value: selectedRow.receiver_id },
-                      { label: "Receive frame", value: selectedRow.receive_frame_id },
-                      { label: "Receive time", value: selectedRow.receive_ts },
-                      { label: "Outcome", value: selectedRow.outcome },
-                      { label: "Error label", value: selectedRow.error_type },
-                      { label: "Note", value: selectedRow.note },
+                      { label: "period_id", value: selectedRow.period_id },
+                      { label: "spadl_type", value: selectedRow.spadl_type },
+                      { label: "player_id", value: selectedRow.player_id },
+                      { label: "synced_frame_id", value: selectedRow.synced_frame_id },
+                      { label: "synced_ts", value: selectedRow.synced_ts },
+                      { label: "outcome", value: selectedRow.outcome },
+                      { label: "error_type", value: selectedRow.error_type },
+                      { label: "note", value: selectedRow.note },
                     ].map(({ label, value }) => (
                       <div key={label} className="event-detail-item">
                         <span className="event-detail-label">{label}</span>
@@ -2409,49 +2378,12 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                         <input
                           type="number"
                           value={draftRow?.synced_frame_id ?? selectedRow.synced_frame_id ?? ""}
-                          onChange={(e) => updateFrameAndTimestamp("synced", e.target.value)}
+                          onChange={(e) => updateSyncedFrameAndTimestamp(e.target.value)}
                           disabled={!isPublicEditable}
                         />
-                        <button type="button" onClick={() => applyCurrentTo("synced")} disabled={!isPublicEditable}>Use Current</button>
+                        <button type="button" onClick={applyCurrentToSynced} disabled={!isPublicEditable}>Use Current</button>
                       </div>
                       <p className="muted id-format-help">synced_ts preview: {draftRow?.synced_ts ?? selectedRow.synced_ts ?? "-"}</p>
-                    </label>
-
-                    <label>
-                      receiver_id
-                      <select
-                        className={!isDraftReceiverIdValid ? "input-error" : ""}
-                        value={draftReceiverId}
-                        onChange={(e) => updateDraftRow({ receiver_id: e.target.value })}
-                        disabled={!isPublicEditable}
-                      >
-                        <option value="">(none)</option>
-                        {draftReceiverId && !knownEntityIdSet.has(draftReceiverId) && (
-                          <option value={draftReceiverId}>{draftReceiverId}</option>
-                        )}
-                        {knownEntityIds.map((value) => (
-                          <option key={value} value={value}>
-                            {value}
-                          </option>
-                        ))}
-                      </select>
-                      {!isDraftReceiverIdValid && (
-                        <p className="error-text id-format-help">Select a valid receiver_id or leave it blank.</p>
-                      )}
-                    </label>
-
-                    <label>
-                      receive_frame_id
-                      <div className="inline-field">
-                        <input
-                          type="number"
-                          value={draftRow?.receive_frame_id ?? selectedRow.receive_frame_id ?? ""}
-                          onChange={(e) => updateFrameAndTimestamp("receive", e.target.value)}
-                          disabled={!isPublicEditable}
-                        />
-                        <button type="button" onClick={() => applyCurrentTo("receive")} disabled={!isPublicEditable}>Use Current</button>
-                      </div>
-                      <p className="muted id-format-help">receive_ts preview: {draftRow?.receive_ts ?? selectedRow.receive_ts ?? "-"}</p>
                     </label>
 
                     <label>
@@ -2496,7 +2428,7 @@ export function AnnotationPage({ publicMode = false }: AnnotationPageProps) {
                   </label>
 
                   <p className="muted inspector-footnote">
-                    synced_frame_id: {draftRow?.synced_frame_id ?? selectedRow.synced_frame_id ?? "-"} | receive_frame_id: {draftRow?.receive_frame_id ?? selectedRow.receive_frame_id ?? "-"}
+                    synced_frame_id: {draftRow?.synced_frame_id ?? selectedRow.synced_frame_id ?? "-"}
                   </p>
                 </>
               )

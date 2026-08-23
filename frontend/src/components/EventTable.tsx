@@ -52,9 +52,7 @@ export function EventTable({
             <th>period_id</th>
             <th>spadl_type</th>
             <th>player_id</th>
-            <th>synced</th>
-            <th>receiver_id</th>
-            <th>receive</th>
+            <th>synced_frame_id</th>
             <th>outcome</th>
             <th>error_type</th>
             <th>note</th>
@@ -89,11 +87,6 @@ export function EventTable({
                 <td>
                   <div className="event-cell-primary">{row.synced_frame_id ?? "-"}</div>
                   <div className="event-cell-secondary">{row.synced_ts ?? "-"}</div>
-                </td>
-                <td>{row.receiver_id ?? ""}</td>
-                <td>
-                  <div className="event-cell-primary">{row.receive_frame_id ?? "-"}</div>
-                  <div className="event-cell-secondary">{row.receive_ts ?? "-"}</div>
                 </td>
                 <td>{row.outcome ? "TRUE" : "FALSE"}</td>
                 <td>{row.error_type ?? ""}</td>
