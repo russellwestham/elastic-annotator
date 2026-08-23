@@ -1310,7 +1310,7 @@ a.button-link.primary .spinner {
 }
 
 .event-table col.event-col-timestamp {
-  width: 16%;
+  width: 12%;
 }
 
 .event-table col.event-col-outcome {
@@ -1322,7 +1322,7 @@ a.button-link.primary .spinner {
 }
 
 .event-table col.event-col-note {
-  width: 20%;
+  width: 24%;
 }
 
 .event-table th,
