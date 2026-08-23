@@ -45,6 +45,17 @@ export function EventTable({
   return (
     <div ref={containerRef} className="table-wrap">
       <table className="event-table">
+        <colgroup>
+          <col className="event-col-index" />
+          <col className="event-col-delta" />
+          <col className="event-col-period" />
+          <col className="event-col-type" />
+          <col className="event-col-player" />
+          <col className="event-col-timestamp" />
+          <col className="event-col-outcome" />
+          <col className="event-col-error" />
+          <col className="event-col-note" />
+        </colgroup>
         <thead ref={headerRef}>
           <tr>
             <th>#</th>
@@ -52,7 +63,7 @@ export function EventTable({
             <th>period_id</th>
             <th>spadl_type</th>
             <th>player_id</th>
-            <th>synced_frame_id</th>
+            <th>timestamp</th>
             <th>outcome</th>
             <th>error_type</th>
             <th>note</th>
@@ -89,8 +100,8 @@ export function EventTable({
                   <div className="event-cell-secondary">{row.synced_ts ?? "-"}</div>
                 </td>
                 <td>{row.outcome ? "TRUE" : "FALSE"}</td>
-                <td>{row.error_type ?? ""}</td>
-                <td>{row.note}</td>
+                <td title={row.error_type ?? ""}>{row.error_type ?? ""}</td>
+                <td title={row.note}>{row.note}</td>
               </tr>
             );
           })}

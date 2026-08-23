@@ -1283,8 +1283,46 @@ a.button-link.primary .spinner {
 
 .event-table {
   width: 100%;
+  min-width: 68rem;
   border-collapse: collapse;
+  table-layout: fixed;
   font-size: 0.82rem;
+}
+
+.event-table col.event-col-index {
+  width: 5%;
+}
+
+.event-table col.event-col-delta {
+  width: 6%;
+}
+
+.event-table col.event-col-period {
+  width: 9%;
+}
+
+.event-table col.event-col-type {
+  width: 13%;
+}
+
+.event-table col.event-col-player {
+  width: 10%;
+}
+
+.event-table col.event-col-timestamp {
+  width: 16%;
+}
+
+.event-table col.event-col-outcome {
+  width: 8%;
+}
+
+.event-table col.event-col-error {
+  width: 13%;
+}
+
+.event-table col.event-col-note {
+  width: 20%;
 }
 
 .event-table th,
@@ -1293,6 +1331,8 @@ a.button-link.primary .spinner {
   border-bottom: 1px solid #e6ecf1;
   text-align: left;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .event-table thead th {
@@ -1310,12 +1350,16 @@ a.button-link.primary .spinner {
 
 .event-cell-primary {
   font-weight: 670;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .event-cell-secondary {
   margin-top: 0.08rem;
   color: var(--text-secondary);
   font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .session-title-cell {
